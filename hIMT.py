@@ -58,7 +58,7 @@ class Node:
 
     #---------------------------------------------------
     # sets the index of the output string
-    def setOutside(self, outside_lsc, outside_parent):
+    def setOutside(self, outside_parent, outside_lsc):
         self.__outside_lsc__ = outside_lsc
         self.__outside_parent__ = outside_parent
     #---------------------------------------------------
@@ -165,9 +165,9 @@ class Hypergraph:
         sons = [int(w) for w in data_l[3].strip().split()]
         assert len(sons)==count
 
-        edge_lsc = float(data_l[2])
+        c_lsc = float(data_l[2])
         inside_lsc = float(data_l[4])
-        return idx, rec, rhs, edge_lsc, sons, inside_lsc
+        return idx, rec, rhs, c_lsc, sons, inside_lsc
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -189,7 +189,9 @@ class Hypergraph:
     def addNewHypothesis(self, line):
         # add new node or update recombined node
         self.__num_edges__ += 1
-        (idx,rec,rhs,edge_lsc,sons,inside_lsc) = self.__parseLine__(line)
+        (idx,rec,rhs,c_lsc,sons,inside_lsc) = self.__parseLine__(line)
+
+        edge_lsc = inside_lsc - ( sum( [ self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons ] ) )
 
         if len(rhs)==1 and rhs[0]=="<s>":
             self.__init_node__ = idx
@@ -215,14 +217,15 @@ class Hypergraph:
             max_outside_lsc = float("-inf")
             max_outside_parent = None
             if node.isHead():
-                node.setOutside(0.0,None)
+                node.setOutside(None,0.0)
             else:
                 for p_idx,p_edge_lsc in node.getParents():
                     outside_lsc = self.__nodes__[p_idx].getOutsideLogScore()+p_edge_lsc
+                    #print self.__nodes__[p_idx].getOutsideLogScore(), p_edge_lsc, outside_lsc
                     if outside_lsc>max_outside_lsc:
                         max_outside_lsc = outside_lsc
                         max_outside_parent = p_idx
-                node.setOutside(max_outside_lsc,max_outside_parent)
+                node.setOutside(max_outside_parent,max_outside_lsc)
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -238,7 +241,8 @@ class Hypergraph:
     def __searchBestNodeMatch__(self, pref_s):
         if len(pref_s)==0:
             node=self.__nodes__[self.__init_node__]
-            return self.__init_node__,node.getInsideLogScore()+node.getOutsideLogScore()
+            ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
+            return self.__init_node__,ec_lsc,ec_lsc
         
         pref = " ".join(pref_s).strip()
         n = len(pref)
@@ -251,13 +255,21 @@ class Hypergraph:
             if covered_sent[0:3] == "<s>": #consider only nodes covering a prefix
                 covered_sent = covered_sent.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip()
                 d = Levenshtein.distance(pref,covered_sent)
-                #print pref,"#",covered_sent,"#", d
-                err_lsc = log(fact(n))+d*log(self.err_p)+(n-d)*log(1.0-self.err_p)-(log(fact(d))+log(fact(max(n-d,0))))
-                cur_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()+err_lsc
+                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(max(n-d,0))))
+                itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
+                cur_lsc = itp_lsc+self.err_w*err_lsc
                 if cur_lsc > max_lsc:
                     max_lsc = cur_lsc
+                    max_itp_lsc = itp_lsc
                     max_node = n_idx
-        return max_node,max_lsc
+                    # print "\n-----------------------"
+                #     print pref,"#",covered_sent,"#",n,"->",d
+                #     print max_lsc, max_itp_lsc, err_lsc
+                #     print self.__nodes__[max_node]
+                #     print "-----------------------\n"
+                # else:
+                #     print " -->","#"+covered_sent+"#",d,cur_lsc,itp_lsc,err_lsc
+        return max_node,max_lsc,max_itp_lsc
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -290,12 +302,11 @@ class Hypergraph:
     # return best translation that completes prefix        
     def getTranslation(self, pref_s):       
         # search for best node 
-        base_node,log_score = self.__searchBestNodeMatch__(pref_s)
+        base_node,ec_lsc,itp_lsc = self.__searchBestNodeMatch__(pref_s)
 
-        print pref_s
-        print log_score
-        print self.__nodes__[base_node]
-        
+        #print pref_s
+        #print ec_lsc,itp_lsc
+        #print self.__nodes__[base_node]
 
         # uphill climbing up to head
         prev_idx = base_node
@@ -304,7 +315,7 @@ class Hypergraph:
         while next_idx != None:
             next = self.__nodes__[next_idx]
             next_covered_string = self.__uphill_derivation__(next,prev_idx,covered_string)
-            print next_idx,next_covered_string
+            #print next_idx,next_covered_string
 
             prev_idx=next_idx
             covered_string = next_covered_string[:]
@@ -312,7 +323,7 @@ class Hypergraph:
                 next_idx = self.__nodes__[prev_idx].getOutsideParent()
             except TypeError:
                 next_idx = None
-        return log_score, covered_string
+        return ec_lsc,itp_lsc, covered_string
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -396,8 +407,8 @@ class HypergraphReader:
 ##   MAIN entry to the program
 ###############################################################
 ###############################################################
-if len(sys.argv)!=4:
-    sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference>\n")
+if len(sys.argv)!=6:
+    sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference> <err_w> <err_p>\n")
     sys.exit()
 
 #TODO: add error weight and parameter
@@ -426,13 +437,14 @@ sys.stderr.write("Done ( "+str(time.time()-aux)+" s. )\n")
 assert len(sources)==len(references)
 
 # TODO: leer por stdint
-err_w = 1.0
-err_p = 0.1 
+err_w = float(sys.argv[4])
+err_p = float(sys.argv[5])
 
 ########################################################################
-# no need for weights, simple formulation
+# no need for individua scores, simple formulation
 ########################################################################
-
+word_strokes = 0
+ref_words = 0
 for s_idx in range(len(sources)):
     init_time = time.time()
     src_s = sources[s_idx]
@@ -448,13 +460,13 @@ for s_idx in range(len(sources)):
         sys.exit()
 
     timestamp = time.time()-init_time
-    sys.stdout.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
-    sys.stdout.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
+    sys.stderr.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
+    sys.stderr.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
     user_pref_s = []
-    cont = 0
+    strokes = 0
     while True:
-        score,out = hg.getTranslation(user_pref_s)
+        ec_lsc,itp_lsc,out = hg.getTranslation(user_pref_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
         common_pref_s = []
         for w_idx in range( min(len(tra_s),len(ref_s)) ):
@@ -462,24 +474,22 @@ for s_idx in range(len(sources)):
                 common_pref_s.append(ref_s[w_idx])
             else:
                 break
-        print tra_s
-        print ref_s
-        print common_pref_s
 
         # output trace
         timestamp = time.time()-init_time
-        sys.stdout.write("Tra ( "+str(timestamp)+" ): "+" ".join(common_pref_s)+" ^"+" ".join(tra_s[len(common_pref_s):])+" ||| "+str(score)+"\n")
+        sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join(common_pref_s)+" ^"+" ".join(tra_s[len(common_pref_s):])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
         
         # continue criterium
         if len(common_pref_s)==len(ref_s):
+            word_strokes += strokes
+            ref_words += len(common_pref_s)
+            wsr = word_strokes/float(ref_words)
+            sys.stderr.write("# cur: "+str((strokes,len(common_pref_s)))+" ws: "+str(word_strokes)+" rw: "+str(ref_words)+" -> wsr: "+str(wsr)+"\n")
             break
         else:
             new_word = ref_s[len(common_pref_s)]
             user_pref_s = common_pref_s+[ new_word ]
-        cont += 1
-        if cont==3:
-            sys.exit()
-
-    sys.exit()
+            strokes +=1
+    #sys.exit()
             
     
