@@ -267,7 +267,8 @@ class Hypergraph:
             if covered_sent[0:3] == "<s>": #consider only nodes covering a prefix
                 covered_sent = covered_sent.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip()
                 d = Levenshtein.distance(pref,covered_sent)
-                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(max(n-d,0))))
+                d = min(d,n)
+                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
                 itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
                 cur_lsc = itp_lsc+self.err_w*err_lsc
                 if cur_lsc > max_lsc:
@@ -448,9 +449,14 @@ sys.stderr.write("Done ( "+str(time.time()-aux)+" s. )\n")
 
 assert len(sources)==len(references)
 
-# TODO: leer por stdint
 err_w = float(sys.argv[4])
 err_p = float(sys.argv[5])
+if err_p<=0:
+    sys.stderr.write("# Error probability rounded to 0.00001\n")
+    err_p = 0.00001
+if err_p>=1:
+    sys.stderr.write("# Error probability rounded to 0.99999\n")
+    err_p = 0.99999
 
 ########################################################################
 # no need for individua scores, simple formulation
