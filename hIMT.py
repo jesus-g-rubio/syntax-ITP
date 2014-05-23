@@ -125,7 +125,7 @@ class Node:
 class Hypergraph:
     #---------------------------------------------------
     def __init__(self):
-        self.__patt__="^\d+[ ]+([\d\->]+)[ ]+[SX][ ]+->(.+)[ ]+:[\d -]*:[ ]+c=([.\d-]+)[ ]+core=\([.,\d-]+\)[ ]+\[\d+\.\.\d+\][ ]*([ \d]+)[ ]*\[total=([.\d-]+)\].*$"
+        self.__patt__="^\d+[ ]+([\d>\-]+)[ ]+[SX][ ]+\->(.+)[ ]+:[\d \-]*:[ ]+c=([e\.\d\-]+)[ ]+core=\([e\.,\d\-]+\)[ ]+\[\d+\.\.\d+\][ ]*([ \d]+)[ ]*\[total=([e\.\d\-]+)\].*$"
 
         self.__regexp__ = re.compile(self.__patt__)
         self.__nodes__ = {}
@@ -142,8 +142,12 @@ class Hypergraph:
     def __parseLine__(self, line):
         match = self.__regexp__.match(line)
         
-        data_l = match.groups()
-        assert len(data_l)==5
+        try:
+            data_l = match.groups()
+            assert len(data_l)==5
+        except AttributeError:
+            print line.strip()
+            sys.exit()
         
         aux = data_l[0].strip().split("->")
         assert len(aux)==1 or len(aux)==2
@@ -163,7 +167,12 @@ class Hypergraph:
                 rhs.append(w)
 
         sons = [int(w) for w in data_l[3].strip().split()]
-        assert len(sons)==count
+        try:
+            assert len(sons)==count
+        except AssertionError:
+            sys.stderr.write("\nWARNING: shitty line: "+line.strip()+"\n#")
+            sons = []
+            rhs = [w for w in rhs if w!=self.__no_terminal__]
 
         c_lsc = float(data_l[2])
         inside_lsc = float(data_l[4])
@@ -189,7 +198,10 @@ class Hypergraph:
     def addNewHypothesis(self, line):
         # add new node or update recombined node
         self.__num_edges__ += 1
-        (idx,rec,rhs,c_lsc,sons,inside_lsc) = self.__parseLine__(line)
+        try:
+            (idx,rec,rhs,c_lsc,sons,inside_lsc) = self.__parseLine__(line)
+        except TypeError:
+            return False
 
         edge_lsc = inside_lsc - ( sum( [ self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons ] ) )
 
@@ -492,4 +504,4 @@ for s_idx in range(len(sources)):
             strokes +=1
     #sys.exit()
             
-    
+sys.stdout.write( str(word_strokes/float(ref_words))+"\n" )
