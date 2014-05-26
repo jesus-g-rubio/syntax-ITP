@@ -312,9 +312,11 @@ class Hypergraph:
     #---------------------------------------------------            
 
     #---------------------------------------------------
-    # return best translation that completes prefix        
-    def getTranslation(self, pref_s):       
-        # search for best node 
+    # return best translation that completes user isles        
+    def getTranslation(self, isles_s):
+        # TODO:
+       
+        # TODO: search for best nodes
         base_node,ec_lsc,itp_lsc = self.__searchBestNodeMatch__(pref_s)
 
         #print pref_s
@@ -415,6 +417,62 @@ class HypergraphReader:
 ###############################################################################
 
 
+
+
+###############################################################
+###############################################################
+##  Auxiliary function to compute user feedback
+###############################################################
+def lev_path(s1, s2):
+    previous_row = xrange(len(s2) + 1)
+    previous_ed = ['']*(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i+1]
+        current_ed = ['D'*(i+1)]
+        for j, c2 in enumerate(s2):
+            insertions = (previous_row[j+1] + 1, previous_ed[j+1]+'I') # j+1 instead of j since previous_row and current_row are one character longer
+            deletions = (current_row[j] + 1, current_ed[j]+'D')       # than s2
+            substitutions = (previous_row[j] + (c1!=c2), previous_ed[j]+'S')
+            edit_op = min(insertions, deletions, substitutions)
+            current_row.append(edit_op[0])
+            current_ed.append(edit_op[1])
+
+        previous_row = current_row
+        previous_ed = current_ed
+    return previous_row[-1],previous_ed[-1]
+###############################################################
+
+###############################################################
+##  Function that computes user feedback
+###############################################################
+def user(tra_s, ref_s):
+    end_interaction = (tra_s[:min(len(tra_s),len(ref_s))] == ref_s)
+    if end_interaction:
+        return ref_s,end_interaction
+
+    ec_cost,ed_path = lev_path(tra_s,ref_s)
+    #print tra_s
+    #print ref_s
+    #print ed_path
+    user_feedback = [c for c in ed_path if c=='S' or c=='I']
+    assert len(user_feedback)==len(tra_s)
+
+    isles = []
+    with_feedback = False
+    for w_pos,ed_op in enumerate(ed_path):
+        if ed_op == 'S' or ed_op == 'D':
+            isles.append(tra_s[w_pos])
+        elif not with_feedback:
+            isles.append(tra_s[w_pos])
+            with_feedback = True
+        elif len(isles)==0 or isles[-1]!="<+>":
+            isles.append('<+>')
+    return isles,user_feedback,end_interaction
+###############################################################    
+###############################################################
+
+
+
 ###############################################################
 ###############################################################
 ##   MAIN entry to the program
@@ -423,8 +481,6 @@ class HypergraphReader:
 if len(sys.argv)!=6:
     sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference> <err_w> <err_p>\n")
     sys.exit()
-
-#TODO: add error weight and parameter
 
 file_name_hypergraph = sys.argv[1]
 reader = HypergraphReader(file_name_hypergraph)
@@ -481,33 +537,26 @@ for s_idx in range(len(sources)):
     sys.stderr.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    user_pref_s = []
+    user_isles_s = []
     strokes = 0
     while True:
-        ec_lsc,itp_lsc,out = hg.getTranslation(user_pref_s)
+        ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
-        common_pref_s = []
-        for w_idx in range( min(len(tra_s),len(ref_s)) ):
-            if tra_s[w_idx]==ref_s[w_idx]:
-                common_pref_s.append(ref_s[w_idx])
-            else:
-                break
+
+        user_isles_s,user_feedback,end_interaction = user(tra_s, ref_s)
 
         # output trace
         timestamp = time.time()-init_time
-        sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join(common_pref_s)+" ^"+" ".join(tra_s[len(common_pref_s):])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
-        
-        # continue criterium
-        if len(common_pref_s)==len(ref_s):
+        sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
+
+        if end_interaction:
             word_strokes += strokes
-            ref_words += len(common_pref_s)
+            ref_words += len(ref_s)
             wsr = word_strokes/float(ref_words)
-            sys.stderr.write("# cur: "+str((strokes,len(common_pref_s)))+" ws: "+str(word_strokes)+" rw: "+str(ref_words)+" -> wsr: "+str(wsr)+"\n")
+            sys.stderr.write("# cur: "+str((strokes,len(ref_s)))+" ws: "+str(word_strokes)+" rw: "+str(ref_words)+" -> wsr: "+str(wsr)+"\n")
             break
-        else:
-            new_word = ref_s[len(common_pref_s)]
-            user_pref_s = common_pref_s+[ new_word ]
-            strokes +=1
+        
+        strokes +=1
     #sys.exit()
             
 sys.stdout.write( str(word_strokes/float(ref_words))+"\n" )
