@@ -249,40 +249,25 @@ class Hypergraph:
     #---------------------------------------------------
 
     #---------------------------------------------------
-    # return the index of the best matching node
-    def __searchBestNodeMatch__(self, pref_s):
-        if len(pref_s)==0:
+    # return a list with the best matching nodes
+    def __searchBestNodesMatch__(self, isles_s):
+        if len(isles_s)==0:
             node=self.__nodes__[self.__init_node__]
             ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
-            return self.__init_node__,ec_lsc,ec_lsc
+            return [(self.__init_node__,ec_lsc,ec_lsc)]
         
-        pref = " ".join(pref_s).strip()
-        n = len(pref)
-        max_lsc = float("-inf")
-        max_node = None
-        ordered_keys = sorted(self.__nodes__)
-        #inside x outside x err
-        for n_idx in ordered_keys:
-            covered_sent = self.__nodes__[n_idx].getCoveredString().strip()
-            if covered_sent[0:3] == "<s>": #consider only nodes covering a prefix
-                covered_sent = covered_sent.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip()
-                d = Levenshtein.distance(pref,covered_sent)
-                d = min(d,n)
-                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
-                itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
-                cur_lsc = itp_lsc+self.err_w*err_lsc
-                if cur_lsc > max_lsc:
-                    max_lsc = cur_lsc
-                    max_itp_lsc = itp_lsc
-                    max_node = n_idx
-                    # print "\n-----------------------"
-                #     print pref,"#",covered_sent,"#",n,"->",d
-                #     print max_lsc, max_itp_lsc, err_lsc
-                #     print self.__nodes__[max_node]
-                #     print "-----------------------\n"
-                # else:
-                #     print " -->","#"+covered_sent+"#",d,cur_lsc,itp_lsc,err_lsc
-        return max_node,max_lsc,max_itp_lsc
+        # backtracking to obtain best set of nodes
+        segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") ]
+        stack = []
+        nodes_list = []
+        print segm_list
+        sys.exit()
+        
+        
+
+
+        
+        return nodes_list
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -314,14 +299,24 @@ class Hypergraph:
     #---------------------------------------------------
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
-        # TODO:
-       
         # TODO: search for best nodes
-        base_node,ec_lsc,itp_lsc = self.__searchBestNodeMatch__(pref_s)
+        nodes_list = self.__searchBestNodesMatch__(isles_s)
 
-        #print pref_s
-        #print ec_lsc,itp_lsc
-        #print self.__nodes__[base_node]
+        # print isles_s
+        # for base_node,ec_lsc,itp_lsc in nodes_list:
+        #     print ec_lsc,itp_lsc
+        #     print self.__nodes__[base_node]
+        #     print "------------------------"
+        #sys.exit()
+
+        # TODO: uphill with several nodes
+        base_node,ec_lsc,itp_lsc = nodes_list[0]
+        pref_s = []
+        for w in isles_s:
+            if w!='<+>':
+                pref_s.append(w)
+            else:
+                break
 
         # uphill climbing up to head
         prev_idx = base_node
@@ -428,7 +423,7 @@ def lev_path(s1, s2):
     previous_ed = ['']*(len(s2) + 1)
     for i, c1 in enumerate(s1):
         current_row = [i+1]
-        current_ed = ['D'*(i+1)]
+        current_ed = ['I'*(i+1)]
         for j, c2 in enumerate(s2):
             insertions = (previous_row[j+1] + 1, previous_ed[j+1]+'I') # j+1 instead of j since previous_row and current_row are one character longer
             deletions = (current_row[j] + 1, current_ed[j]+'D')       # than s2
@@ -446,28 +441,35 @@ def lev_path(s1, s2):
 ##  Function that computes user feedback
 ###############################################################
 def user(tra_s, ref_s):
-    end_interaction = (tra_s[:min(len(tra_s),len(ref_s))] == ref_s)
-    if end_interaction:
-        return ref_s,end_interaction
-
-    ec_cost,ed_path = lev_path(tra_s,ref_s)
-    #print tra_s
-    #print ref_s
-    #print ed_path
-    user_feedback = [c for c in ed_path if c=='S' or c=='I']
-    assert len(user_feedback)==len(tra_s)
+    ed_cost,ed_path = lev_path(tra_s,ref_s)
+    assert len(ed_path)==len(tra_s)
+    print ed_path
 
     isles = []
-    with_feedback = False
-    for w_pos,ed_op in enumerate(ed_path):
-        if ed_op == 'S' or ed_op == 'D':
-            isles.append(tra_s[w_pos])
-        elif not with_feedback:
-            isles.append(tra_s[w_pos])
-            with_feedback = True
-        elif len(isles)==0 or isles[-1]!="<+>":
-            isles.append('<+>')
-    return isles,user_feedback,end_interaction
+    user_feedback = []
+    ref_pos = mouse_actions = strokes = 0
+    add_feedback = end_interaction = True
+    for pos,ed_op in enumerate(ed_path):
+        if ed_op == "S":
+            if ref_s[ref_pos]==tra_s[pos]:
+                isles.append(ref_s[ref_pos])
+                mouse_actions+=1
+                user_feedback.append("M")
+            elif add_feedback:
+                isles.append(ref_s[ref_pos])
+                add_feedback = False
+                strokes += 1
+                user_feedback.append("W")
+            else:
+                user_feedback.append('E')
+                end_interaction = False
+                if len(isles)==0 or isles[-1]!="<+>":
+                    isles.append('<+>')
+            ref_pos += 1
+        else:
+            user_feedback.append('E')
+            
+    return isles,user_feedback,end_interaction,mouse_actions,strokes
 ###############################################################    
 ###############################################################
 
@@ -518,6 +520,7 @@ if err_p>=1:
 # no need for individua scores, simple formulation
 ########################################################################
 word_strokes = 0
+mouse_actions = 0
 ref_words = 0
 for s_idx in range(len(sources)):
     init_time = time.time()
@@ -543,20 +546,27 @@ for s_idx in range(len(sources)):
         ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
-        user_isles_s,user_feedback,end_interaction = user(tra_s, ref_s)
+        user_isles_s,user_feedback,end_interaction,ma,ws = user(tra_s, ref_s)
+        strokes += ws
+        print "T:",tra_s
+        print "R:",ref_s
+        print "I:",user_isles_s
+        print "U:",user_feedback,end_interaction
 
         # output trace
         timestamp = time.time()-init_time
         sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
 
         if end_interaction:
+            mouse_actions += ma
             word_strokes += strokes
             ref_words += len(ref_s)
+            wsmr = (word_strokes+mouse_actions)/float(ref_words)
             wsr = word_strokes/float(ref_words)
-            sys.stderr.write("# cur: "+str((strokes,len(ref_s)))+" ws: "+str(word_strokes)+" rw: "+str(ref_words)+" -> wsr: "+str(wsr)+"\n")
+            sys.stderr.write("# cur: "+str((user_feedback.count("S"),strokes,ma)))
+            sys.stderr.write(" ws: "+str(word_strokes)+" ma: "+str(mouse_actions)+" rw: "+str(ref_words))
+            sys.stderr.write(" -> wsr: "+str(wsr)+" wsmr: "+str(wsmr)+"\n")
             break
-        
-        strokes +=1
     #sys.exit()
             
 sys.stdout.write( str(word_strokes/float(ref_words))+"\n" )
