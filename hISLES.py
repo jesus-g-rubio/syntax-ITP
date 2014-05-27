@@ -249,24 +249,80 @@ class Hypergraph:
     #---------------------------------------------------
 
     #---------------------------------------------------
+    # return the best matching node among valid nodes
+    def __searchBestNodeMatchRestricted__(self, segm_s, valid_nodes, is_prefix):
+        # TODO:
+        segm = " ".join(segm_s).strip()
+        n = len(segm)
+        max_lsc = float("-inf")
+        max_node = None
+        
+        for n_idx in valid_nodes:
+            covered_sent = self.__nodes__[n_idx].getCoveredString().strip()
+            if not is_prefix or (is_prefix and covered_sent[0:3] == "<s>"): 
+                covered_sent = covered_sent.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip()
+                d = Levenshtein.distance(segm,covered_sent)
+                d = min(d,n)
+                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
+                itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
+                cur_lsc = itp_lsc+self.err_w*err_lsc #inside x outside x err**err_w
+                if cur_lsc > max_lsc:
+                    max_lsc = cur_lsc
+                    max_itp_lsc = itp_lsc
+                    max_node = n_idx
+        return max_node,max_lsc,max_itp_lsc
+    #---------------------------------------------------
+
+    #---------------------------------------------------
+    # compute siblings of a given node
+    def __family__(self, n_idx):
+        ancestors = {} # compute parents
+        to_process = dict([(p_tuple[0],True) for p_tuple in self.__nodes__[n_idx].getParents()])
+        first_sons = {}
+        while len(to_process)>0:
+            c_idx,_ = to_process.popitem()
+            for p_idx,_ in self.__nodes__[c_idx].getParents():
+                if p_idx not in to_process and p_idx not in ancestors:
+                    to_process[p_idx]=True
+            ancestors[c_idx]=True
+            for _,sons,_ in self.__nodes__[c_idx].getSons():
+                for s_idx in sons:
+                    if s_idx not in first_sons and s_idx!=n_idx:
+                        first_sons[s_idx]=True
+        siblings = {}
+        to_process = dict([(k,True) for k in first_sons])
+        while len(to_process)>0:
+            c_idx,_ = to_process.popitem()
+            for _,sons,_ in self.__nodes__[c_idx].getSons():
+                for s_idx in sons:
+                    if s_idx not in to_process and s_idx not in siblings and s_idx not in ancestors and s_idx!=n_idx:
+                        to_process[s_idx]=True
+            siblings[c_idx]=True
+        return ancestors.keys(),siblings.keys()
+    #---------------------------------------------------    
+
+    #---------------------------------------------------
     # return a list with the best matching nodes
     def __searchBestNodesMatch__(self, isles_s):
         if len(isles_s)==0:
             node=self.__nodes__[self.__init_node__]
             ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
-            return [(self.__init_node__,ec_lsc,ec_lsc)]
+            return [([],self.__init_node__,ec_lsc,ec_lsc)]
         
         # backtracking to obtain best set of nodes
-        segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") ]
-        stack = []
+        valid_nodes = sorted(self.__nodes__)
+        #common_ancestors = sorted(self.__nodes__)
         nodes_list = []
-        print segm_list
-        sys.exit()
-        
-        
-
-
-        
+        first_segm = True
+        segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
+        for segm_s in segm_list:
+            base_node,ec_lsc,itp_lsc = self.__searchBestNodeMatchRestricted__(segm_s, valid_nodes, first_segm)
+            first_segm = False
+            bn_ancestors,bn_siblings = self.__family__(base_node)
+            valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
+            #common_ancestors = [n_idx for n_idx in bn_ancestors if n_idx in common_ancestors]
+            # TODO: backtracking if valid_nodes vacio
+            nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc))
         return nodes_list
     #---------------------------------------------------
 
@@ -274,7 +330,7 @@ class Hypergraph:
     # return translation resulting from uphill
     # derivation between prev_idx and next
     # prev_idx covers covered_string
-    def __uphill_derivation__(self,next,prev_idx,covered_string):
+    def __uphill_derivation__(self,next,prev_idx,mod_covered_strings):
         max_edge = (None, None, float("-inf"))
         max_edge_out = None
         for son_tuple in next.getSons(): # search for best edge
@@ -286,8 +342,8 @@ class Hypergraph:
         pos = 0
         for w in rhs:
             if w==self.__no_terminal__:
-                if sons[pos]==prev_idx:
-                    next_covered_string += covered_string+" "
+                if sons[pos] in mod_covered_strings:
+                    next_covered_string += mod_covered_strings[sons[pos]]+" "
                 else:
                     next_covered_string += self.__nodes__[sons[pos]].getCoveredString()+" "
                 pos += 1
@@ -300,39 +356,33 @@ class Hypergraph:
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
         # TODO: search for best nodes
+        print isles_s
         nodes_list = self.__searchBestNodesMatch__(isles_s)
 
-        # print isles_s
-        # for base_node,ec_lsc,itp_lsc in nodes_list:
-        #     print ec_lsc,itp_lsc
-        #     print self.__nodes__[base_node]
-        #     print "------------------------"
-        #sys.exit()
-
-        # TODO: uphill with several nodes
-        base_node,ec_lsc,itp_lsc = nodes_list[0]
-        pref_s = []
-        for w in isles_s:
-            if w!='<+>':
-                pref_s.append(w)
-            else:
-                break
-
-        # uphill climbing up to head
-        prev_idx = base_node
-        covered_string = " ".join(pref_s)
-        next_idx = self.__nodes__[prev_idx].getOutsideParent()
-        while next_idx != None:
-            next = self.__nodes__[next_idx]
-            next_covered_string = self.__uphill_derivation__(next,prev_idx,covered_string)
-            #print next_idx,next_covered_string
-
-            prev_idx=next_idx
-            covered_string = next_covered_string[:]
-            try:
-                next_idx = self.__nodes__[prev_idx].getOutsideParent()
-            except TypeError:
-                next_idx = None
+        # TODO: uphill derivation from various nodes
+        # Individual uphill of each one updating information
+        mod_covered_strings = {}
+        for segm_s,base_node,ec_lsc,itp_lsc in nodes_list:
+            # uphill climbing up to head
+            prev_idx = base_node
+            covered_string = " ".join(segm_s)
+            mod_covered_strings[prev_idx] = covered_string.strip()
+            next_idx = self.__nodes__[prev_idx].getOutsideParent()
+            while next_idx != None:
+                next = self.__nodes__[next_idx]
+                next_covered_string = self.__uphill_derivation__(next,prev_idx,mod_covered_strings)
+                
+                prev_idx=next_idx
+                covered_string = next_covered_string[:]
+                mod_covered_strings[prev_idx] = covered_string.strip()
+                try:
+                    next_idx = self.__nodes__[prev_idx].getOutsideParent()
+                except TypeError:
+                    next_idx = None
+            print segm_s
+            print covered_string
+        print covered_string
+        
         return ec_lsc,itp_lsc, covered_string
     #---------------------------------------------------
 
@@ -425,8 +475,8 @@ def lev_path(s1, s2):
         current_row = [i+1]
         current_ed = ['I'*(i+1)]
         for j, c2 in enumerate(s2):
-            insertions = (previous_row[j+1] + 1, previous_ed[j+1]+'I') # j+1 instead of j since previous_row and current_row are one character longer
-            deletions = (current_row[j] + 1, current_ed[j]+'D')       # than s2
+            insertions = (previous_row[j+1] + 1, previous_ed[j+1]+'I') 
+            deletions = (current_row[j] + 1, current_ed[j]+'D')       
             substitutions = (previous_row[j] + (c1!=c2), previous_ed[j]+'S')
             edit_op = min(insertions, deletions, substitutions)
             current_row.append(edit_op[0])
@@ -443,7 +493,6 @@ def lev_path(s1, s2):
 def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
     assert len(ed_path)==len(tra_s)
-    print ed_path
 
     isles = []
     user_feedback = []
