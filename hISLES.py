@@ -278,18 +278,25 @@ class Hypergraph:
         ancestors = {} # compute parents
         to_process = dict([(p_tuple[0],True) for p_tuple in self.__nodes__[n_idx].getParents()])
         first_sons = {}
-        while len(to_process)>0:
+        while len(to_process)>0: # compute ancestors
             c_idx,_ = to_process.popitem()
             for p_idx,_ in self.__nodes__[c_idx].getParents():
                 if p_idx not in to_process and p_idx not in ancestors:
                     to_process[p_idx]=True
             ancestors[c_idx]=True
+        
+        # compute first sons, share edge with ancestor, but not ancestor themselves
+        for c_idx in ancestors:
             for _,sons,_ in self.__nodes__[c_idx].getSons():
-                for s_idx in sons:
-                    if s_idx not in first_sons and s_idx!=n_idx:
-                        first_sons[s_idx]=True
-        siblings = {}
-        to_process = dict([(k,True) for k in first_sons])
+                if len(sons)==2:
+                    if sons[0] in ancestors or sons[0]==n_idx:
+                        if sons[1] not in ancestors and sons[1] not in first_sons and sons[1]!=n_idx:
+                            first_sons[sons[1]]=True
+                    elif sons[1] in ancestors or sons[1]==n_idx:
+                        if sons[0] not in ancestors and sons[0] not in first_sons and sons[0]!=n_idx:
+                            first_sons[sons[0]]=True
+        siblings = {} # compute rest of siblings
+        to_process = first_sons
         while len(to_process)>0:
             c_idx,_ = to_process.popitem()
             for _,sons,_ in self.__nodes__[c_idx].getSons():
@@ -297,12 +304,11 @@ class Hypergraph:
                     if s_idx not in to_process and s_idx not in siblings and s_idx not in ancestors and s_idx!=n_idx:
                         to_process[s_idx]=True
             siblings[c_idx]=True
-        return ancestors.keys(),siblings.keys()
+        return ancestors,siblings
     #---------------------------------------------------    
 
     #---------------------------------------------------
     # return a list with the best matching nodes
-    # and consensus derivation including all them
     def __searchBestNodesMatch__(self, isles_s):
         if len(isles_s)==0:
             #node=self.__nodes__[self.__init_node__]
@@ -320,27 +326,88 @@ class Hypergraph:
             first_segm = False
             bn_ancestors,bn_siblings = self.__family__(base_node)
             valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
+            print len(valid_nodes),segm_s
             #common_ancestors = [n_idx for n_idx in bn_ancestors if n_idx in common_ancestors]
             # TODO: backtracking if valid_nodes vacio
-            # TODO: return consensus derivation from ancestors
-            nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc))
+
+            nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc,bn_ancestors))
         return nodes_list
     #---------------------------------------------------
+
+    #---------------------------------------------------
+    # Return a derivation common to all nodes
+    def __consensusDerivation__(self, nodes):
+        heads = dict( [(n_idx,True) for n_idx in self.__nodes__] )
+        ancestors_cover = {}
+        #TODO: contar doble cover solo si suben por el mismo edge
+        for node_pos,node_tuple in enumerate(nodes):
+            _,base_node,_,_,ancestors=node_tuple
+            if base_node not in ancestors_cover:
+                ancestors_cover[base_node] = []
+            ancestors_cover[base_node].append(node_pos)
+            n_heads = {}
+            for n_idx in ancestors:
+                if n_idx not in ancestors_cover:
+                    ancestors_cover[n_idx] = []
+                ancestors_cover[n_idx].append(node_pos)
+                if len(self.__nodes__[n_idx].getParents())==0:
+                    n_heads[n_idx]=True
+            heads = dict([(n_idx,True) for n_idx in n_heads if n_idx in heads])
+        assert len(heads)==1
+
+        #print heads
+        #print ancestors_cover
+        raw_consensus = []
+        to_process = dict([ (n_idx,range(len(nodes))) for n_idx in heads ])
+        next_to_process = {}
+        while len(to_process)>0:
+            #print to_process
+            for n_idx,coverage in to_process.items():
+                #print n_idx,coverage
+                coverage.sort()
+                for _,sons,_ in self.__nodes__[n_idx].getSons():
+                    n_cover = []
+                    for s_idx in sons:
+                        if s_idx in ancestors_cover:
+                            n_cover.append(ancestors_cover[s_idx])
+                        else:
+                            n_cover.append([])
+                    #print "->",sons,n_cover
+                    if sorted(sum(n_cover,[]))==coverage:
+                        for s_pos in range(len(sons)):
+                            if n_cover[s_pos]!=[] and sons[s_pos] not in next_to_process and sons[s_pos] not in to_process:
+                                next_to_process[sons[s_pos]] = n_cover[s_pos]
+                raw_consensus.append(n_idx)
+            to_process = next_to_process
+            next_to_process = {}
+        seen = {}
+        for _,base_node,_,_,_ in nodes:
+            seen[base_node]=True
+        consensus = []
+        for n_idx in reversed(raw_consensus):
+            if n_idx not in seen:
+                consensus.append(n_idx)
+                seen[n_idx] = True
+                
+        return sorted(consensus)
+    #---------------------------------------------------    
+
 
     #---------------------------------------------------
     # return translation resulting from uphill
     # derivation between prev_idx and next
     # prev_idx covers covered_string
-    def __uphill_derivation__(self,next,previous_nodes,mod_covered_strings,segm_idx):
+    def __uphill_derivation__(self,next_idx,mod_covered_strings):
         max_edge = (None, None, float("-inf"))
         max_step_lsc = float("-inf")
         max_coverage = []
+        next = self.__nodes__[next_idx]
         for son_tuple in next.getSons(): # search for best edge
             _,sons,edge_lsc = son_tuple
             for s_idx in sons:
-                if s_idx in previous_nodes:
+                if s_idx in mod_covered_strings:
                     step_lsc = sum([self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons])+edge_lsc
-                    step_cover = list(set( sum([mod_covered_strings[s_idx][2] for s_idx in sons if s_idx in mod_covered_strings] ,[]) ))
+                    step_cover = list(set( sum([mod_covered_strings[s_idx][1] for s_idx in sons if s_idx in mod_covered_strings],[])))
                     if len(step_cover)>len(max_coverage):
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
@@ -371,44 +438,22 @@ class Hypergraph:
     def getTranslation(self, isles_s):
         # TODO: search for best nodes and obtain consensus derivation
         nodes_list = self.__searchBestNodesMatch__(isles_s)
-        
-        sys.exit()
+        #print nodes_list
+        consensus = self.__consensusDerivation__(nodes_list)
+        #print consensus
 
-
-        print "NODES:",nodes_list
-        # TODO: uphill derivation from various nodes
-        # Individual uphill of each one updating information
         mod_covered_strings = {}
-        segm_idx = 0
-        for segm_s,base_node,ec_lsc,itp_lsc in nodes_list:
-            # TODO: uphill decoding encajar diferentes segmentos
-            heads = []
-            current_nodes = {base_node:True}
-            mod_covered_strings[base_node] = (" ".join(segm_s),0.0,[segm_idx])
-            while len(current_nodes)>0:
-                heads = current_nodes.keys()
-                parents = set([ p_tup[0] for c_idx in current_nodes for p_tup in self.__nodes__[c_idx].getParents() ])
-                for p_idx in parents:
-                    parent_node = self.__nodes__[p_idx]
-                    parent_covered_string,step_lsc,coverage = self.__uphill_derivation__(parent_node,current_nodes,mod_covered_strings,segm_idx)
-                    
-                    #print coverage
-                    if p_idx not in mod_covered_strings:
-                        mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
-                        print "New:",segm_idx, segm_s, mod_covered_strings[p_idx]
-                    else:
-                        print "Old:",segm_idx, segm_s, mod_covered_strings[p_idx]
-                        if len(coverage)>len(mod_covered_strings[p_idx][2]): 
-                            mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
-                        elif len(coverage)==len(mod_covered_strings[p_idx][2]) and step_lsc>mod_covered_strings[p_idx][1]:
-                            mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
-                        print "->",mod_covered_strings[p_idx]
+        for segm_pos,segm_tuple in enumerate(nodes_list):
+            segm_s,base_node,_,_,_ = segm_tuple
+            mod_covered_strings[base_node]=(" ".join(segm_s),[segm_pos])
 
-                current_nodes = dict([(p_idx,True) for p_idx in parents])
-            print "FINAL:",segm_idx,segm_s,"-",heads,"-->",mod_covered_strings[heads[0]]
-            segm_idx += 1
-        assert len(mod_covered_strings[heads[0]][2])==len(nodes_list)
-        return ec_lsc,itp_lsc,mod_covered_strings[heads[0]][0]
+        #print mod_covered_strings
+        for next_idx in consensus:
+            next_covered_string,step_lsc,next_cover = self.__uphill_derivation__(next_idx,mod_covered_strings)
+            mod_covered_strings[next_idx] =(next_covered_string,next_cover)
+            #print next_idx,next_cover,next_covered_string
+        assert len(next_cover)==len(nodes_list)
+        return step_lsc,step_lsc,next_covered_string
     #---------------------------------------------------
 
     #---------------------------------------------------
