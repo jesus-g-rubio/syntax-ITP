@@ -233,7 +233,6 @@ class Hypergraph:
             else:
                 for p_idx,p_edge_lsc in node.getParents():
                     outside_lsc = self.__nodes__[p_idx].getOutsideLogScore()+p_edge_lsc
-                    #print self.__nodes__[p_idx].getOutsideLogScore(), p_edge_lsc, outside_lsc
                     if outside_lsc>max_outside_lsc:
                         max_outside_lsc = outside_lsc
                         max_outside_parent = p_idx
@@ -330,60 +329,59 @@ class Hypergraph:
     # return translation resulting from uphill
     # derivation between prev_idx and next
     # prev_idx covers covered_string
-    def __uphill_derivation__(self,next,prev_idx,mod_covered_strings):
+    def __uphill_derivation__(self,next,previous_nodes,mod_covered_strings):
         max_edge = (None, None, float("-inf"))
-        max_edge_out = None
+        max_step_lsc = float("-inf")
         for son_tuple in next.getSons(): # search for best edge
-            if son_tuple[2]>max_edge[2] and prev_idx in son_tuple[1]:
-                max_edge = son_tuple
-        
+            _,sons,edge_lsc = son_tuple
+            for s_idx in sons:
+                if s_idx in previous_nodes:
+                    step_lsc = sum([self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons])+edge_lsc
+                    if step_lsc>max_step_lsc:
+                        max_edge = son_tuple
+                        max_step_lsc = step_lsc
+                    break
+                        
         rhs,sons,edge_lsc = max_edge
         next_covered_string = ""
         pos = 0
         for w in rhs:
             if w==self.__no_terminal__:
                 if sons[pos] in mod_covered_strings:
-                    next_covered_string += mod_covered_strings[sons[pos]]+" "
+                    next_covered_string += mod_covered_strings[sons[pos]][0]+" "
                 else:
                     next_covered_string += self.__nodes__[sons[pos]].getCoveredString()+" "
                 pos += 1
             else:
                 next_covered_string += w+" "
-        return next_covered_string
+        return next_covered_string,max_step_lsc
     #---------------------------------------------------            
 
     #---------------------------------------------------
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
         # TODO: search for best nodes
-        print isles_s
         nodes_list = self.__searchBestNodesMatch__(isles_s)
 
         # TODO: uphill derivation from various nodes
         # Individual uphill of each one updating information
         mod_covered_strings = {}
         for segm_s,base_node,ec_lsc,itp_lsc in nodes_list:
-            # uphill climbing up to head
-            prev_idx = base_node
-            covered_string = " ".join(segm_s)
-            mod_covered_strings[prev_idx] = covered_string.strip()
-            next_idx = self.__nodes__[prev_idx].getOutsideParent()
-            while next_idx != None:
-                next = self.__nodes__[next_idx]
-                next_covered_string = self.__uphill_derivation__(next,prev_idx,mod_covered_strings)
-                
-                prev_idx=next_idx
-                covered_string = next_covered_string[:]
-                mod_covered_strings[prev_idx] = covered_string.strip()
-                try:
-                    next_idx = self.__nodes__[prev_idx].getOutsideParent()
-                except TypeError:
-                    next_idx = None
-            print segm_s
-            print covered_string
-        print covered_string
-        
-        return ec_lsc,itp_lsc, covered_string
+            # TODO: uphill decoding encajar diferentes segmentos
+            heads = []
+            current_nodes = {base_node:True}
+            mod_covered_strings[base_node] = (" ".join(segm_s),0.0)
+            while len(current_nodes)>0:
+                heads = current_nodes.keys()
+                parents = set([ p_tup[0] for c_idx in current_nodes for p_tup in self.__nodes__[c_idx].getParents() ])
+                for p_idx in parents:
+                    parent_node = self.__nodes__[p_idx]
+                    parent_covered_string,step_lsc = self.__uphill_derivation__(parent_node,current_nodes,mod_covered_strings)
+                    if p_idx not in mod_covered_strings or step_lsc>mod_covered_strings[p_idx][1]:
+                        mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc)
+                current_nodes = dict([(p_idx,True) for p_idx in parents])
+            print segm_s,"-",heads,"-->",mod_covered_strings[heads[0]]
+        return ec_lsc,itp_lsc,mod_covered_strings[heads[0]][0]
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -492,15 +490,16 @@ def lev_path(s1, s2):
 ###############################################################
 def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
-    assert len(ed_path)==len(tra_s)
+    assert len(ed_path.replace('D',''))==len(tra_s) # do not take into account deleted reference words
 
+    print ed_path
     isles = []
     user_feedback = []
-    ref_pos = mouse_actions = strokes = 0
+    ref_pos = tra_pos = mouse_actions = strokes = 0
     add_feedback = end_interaction = True
-    for pos,ed_op in enumerate(ed_path):
+    for ed_op in ed_path:
         if ed_op == "S":
-            if ref_s[ref_pos]==tra_s[pos]:
+            if ref_s[ref_pos]==tra_s[tra_pos]:
                 isles.append(ref_s[ref_pos])
                 mouse_actions+=1
                 user_feedback.append("M")
@@ -515,8 +514,20 @@ def user(tra_s, ref_s):
                 if len(isles)==0 or isles[-1]!="<+>":
                     isles.append('<+>')
             ref_pos += 1
-        else:
+            tra_pos += 1
+        elif ed_op == 'I':
             user_feedback.append('E')
+            tra_pos += 1
+        else: # Deleted reference word
+            if add_feedback: 
+                isles.append(ref_s[ref_pos])
+                add_feedback = False
+                strokes += 1
+            else:
+                end_interaction = False
+                if len(isles)==0 or isles[-1]!="<+>":
+                    isles.append('<+>')
+            ref_pos += 1
             
     return isles,user_feedback,end_interaction,mouse_actions,strokes
 ###############################################################    
@@ -597,14 +608,15 @@ for s_idx in range(len(sources)):
 
         user_isles_s,user_feedback,end_interaction,ma,ws = user(tra_s, ref_s)
         strokes += ws
-        print "T:",tra_s
-        print "R:",ref_s
-        print "I:",user_isles_s
-        print "U:",user_feedback,end_interaction
 
         # output trace
         timestamp = time.time()-init_time
         sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
+
+        print "T:",tra_s
+        print "R:",ref_s
+        print "I:",user_isles_s
+        print "U:",user_feedback,end_interaction
 
         if end_interaction:
             mouse_actions += ma

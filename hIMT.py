@@ -291,10 +291,19 @@ class Hypergraph:
     # prev_idx covers covered_string
     def __uphill_derivation__(self,next,prev_idx,covered_string):
         max_edge = (None, None, float("-inf"))
-        max_edge_out = None
+        max_step_lsc = None
         for son_tuple in next.getSons(): # search for best edge
-            if son_tuple[2]>max_edge[2] and prev_idx in son_tuple[1]:
-                max_edge = son_tuple
+            _,sons,edge_lsc = son_tuple
+            for s_idx in sons:
+                if prev_idx in sons:
+                    step_lsc = sum([self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons])+edge_lsc
+                    if step_lsc>max_step_lsc:
+                        max_edge = son_tuple
+                        max_step_lsc = step_lsc
+                    break
+        # for son_tuple in next.getSons(): # search for best edge
+        #     if son_tuple[2]>max_edge[2] and prev_idx in son_tuple[1]:
+        #         max_edge = son_tuple
         
         rhs,sons,edge_lsc = max_edge
         next_covered_string = ""
