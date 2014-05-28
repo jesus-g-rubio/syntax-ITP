@@ -329,17 +329,24 @@ class Hypergraph:
     # return translation resulting from uphill
     # derivation between prev_idx and next
     # prev_idx covers covered_string
-    def __uphill_derivation__(self,next,previous_nodes,mod_covered_strings):
+    def __uphill_derivation__(self,next,previous_nodes,mod_covered_strings,segm_idx):
         max_edge = (None, None, float("-inf"))
         max_step_lsc = float("-inf")
+        max_coverage = []
         for son_tuple in next.getSons(): # search for best edge
             _,sons,edge_lsc = son_tuple
             for s_idx in sons:
                 if s_idx in previous_nodes:
                     step_lsc = sum([self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons])+edge_lsc
-                    if step_lsc>max_step_lsc:
+                    step_cover = list(set( sum([mod_covered_strings[s_idx][2] for s_idx in sons if s_idx in mod_covered_strings] ,[]) ))
+                    if len(step_cover)>len(max_coverage):
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
+                        max_coverage = step_cover
+                    elif len(step_cover)==len(max_coverage) and step_lsc>max_step_lsc:
+                        max_edge = son_tuple
+                        max_step_lsc = step_lsc
+                        max_coverage = step_cover
                     break
                         
         rhs,sons,edge_lsc = max_edge
@@ -354,7 +361,7 @@ class Hypergraph:
                 pos += 1
             else:
                 next_covered_string += w+" "
-        return next_covered_string,max_step_lsc
+        return next_covered_string,max_step_lsc,max_coverage
     #---------------------------------------------------            
 
     #---------------------------------------------------
@@ -363,24 +370,39 @@ class Hypergraph:
         # TODO: search for best nodes
         nodes_list = self.__searchBestNodesMatch__(isles_s)
 
+        print "NODES:",nodes_list
         # TODO: uphill derivation from various nodes
         # Individual uphill of each one updating information
         mod_covered_strings = {}
+        segm_idx = 0
         for segm_s,base_node,ec_lsc,itp_lsc in nodes_list:
             # TODO: uphill decoding encajar diferentes segmentos
             heads = []
             current_nodes = {base_node:True}
-            mod_covered_strings[base_node] = (" ".join(segm_s),0.0)
+            mod_covered_strings[base_node] = (" ".join(segm_s),0.0,[segm_idx])
             while len(current_nodes)>0:
                 heads = current_nodes.keys()
                 parents = set([ p_tup[0] for c_idx in current_nodes for p_tup in self.__nodes__[c_idx].getParents() ])
                 for p_idx in parents:
                     parent_node = self.__nodes__[p_idx]
-                    parent_covered_string,step_lsc = self.__uphill_derivation__(parent_node,current_nodes,mod_covered_strings)
-                    if p_idx not in mod_covered_strings or step_lsc>mod_covered_strings[p_idx][1]:
-                        mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc)
+                    parent_covered_string,step_lsc,coverage = self.__uphill_derivation__(parent_node,current_nodes,mod_covered_strings,segm_idx)
+                    
+                    #print coverage
+                    if p_idx not in mod_covered_strings:
+                        mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
+                        print "New:",segm_idx, segm_s, mod_covered_strings[p_idx]
+                    else:
+                        print "Old:",segm_idx, segm_s, mod_covered_strings[p_idx]
+                        if len(coverage)>len(mod_covered_strings[p_idx][2]): 
+                            mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
+                        elif len(coverage)==len(mod_covered_strings[p_idx][2]) and step_lsc>mod_covered_strings[p_idx][1]:
+                            mod_covered_strings[p_idx] = (parent_covered_string.strip(),step_lsc,coverage)
+                        print "->",mod_covered_strings[p_idx]
+
                 current_nodes = dict([(p_idx,True) for p_idx in parents])
-            print segm_s,"-",heads,"-->",mod_covered_strings[heads[0]]
+            print "FINAL:",segm_idx,segm_s,"-",heads,"-->",mod_covered_strings[heads[0]]
+            segm_idx += 1
+        assert len(mod_covered_strings[heads[0]][2])==len(nodes_list)
         return ec_lsc,itp_lsc,mod_covered_strings[heads[0]][0]
     #---------------------------------------------------
 
@@ -492,7 +514,7 @@ def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
     assert len(ed_path.replace('D',''))==len(tra_s) # do not take into account deleted reference words
 
-    print ed_path
+    #print ed_path
     isles = []
     user_feedback = []
     ref_pos = tra_pos = mouse_actions = strokes = 0
@@ -613,10 +635,10 @@ for s_idx in range(len(sources)):
         timestamp = time.time()-init_time
         sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
 
-        print "T:",tra_s
-        print "R:",ref_s
-        print "I:",user_isles_s
-        print "U:",user_feedback,end_interaction
+        #print "T:",tra_s
+        #print "R:",ref_s
+        print " --> I:"," ".join(user_isles_s)
+        #print "U:",user_feedback,end_interaction
 
         if end_interaction:
             mouse_actions += ma
