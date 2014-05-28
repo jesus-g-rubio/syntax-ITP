@@ -302,15 +302,16 @@ class Hypergraph:
 
     #---------------------------------------------------
     # return a list with the best matching nodes
+    # and consensus derivation including all them
     def __searchBestNodesMatch__(self, isles_s):
         if len(isles_s)==0:
-            node=self.__nodes__[self.__init_node__]
-            ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
-            return [([],self.__init_node__,ec_lsc,ec_lsc)]
+            #node=self.__nodes__[self.__init_node__]
+            #ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
+            #return [([],self.__init_node__,ec_lsc,ec_lsc)]
+            isles_s = ['<s>']
         
         # backtracking to obtain best set of nodes
         valid_nodes = sorted(self.__nodes__)
-        #common_ancestors = sorted(self.__nodes__)
         nodes_list = []
         first_segm = True
         segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
@@ -321,6 +322,7 @@ class Hypergraph:
             valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
             #common_ancestors = [n_idx for n_idx in bn_ancestors if n_idx in common_ancestors]
             # TODO: backtracking if valid_nodes vacio
+            # TODO: return consensus derivation from ancestors
             nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc))
         return nodes_list
     #---------------------------------------------------
@@ -367,8 +369,11 @@ class Hypergraph:
     #---------------------------------------------------
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
-        # TODO: search for best nodes
+        # TODO: search for best nodes and obtain consensus derivation
         nodes_list = self.__searchBestNodesMatch__(isles_s)
+        
+        sys.exit()
+
 
         print "NODES:",nodes_list
         # TODO: uphill derivation from various nodes
