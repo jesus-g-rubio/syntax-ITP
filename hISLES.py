@@ -357,7 +357,17 @@ class Hypergraph:
                 first_segm = False
                 segm_idx += 1
                 segm_best = 1
-        return nodes_list
+
+            if segm_idx == len(segm_list):
+                #TODO: include consensus derivation in backtracking
+                common_derivation,consensus,ancestors_coverage = self.__consensusDerivation__(nodes_list)
+                if common_derivation:
+                    return nodes_list,consensus,ancestors_coverage
+                else:
+                    # backtracking because no common derivation
+                    segm_idx,valid_nodes,segm_best=stack.pop()
+                    nodes_list.pop()
+                    segm_best+=1
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -365,10 +375,12 @@ class Hypergraph:
     def __consensusDerivation__(self, nodes):
         heads = dict( [(n_idx,True) for n_idx in self.__nodes__] )
         ancestors_cover = {}
-        #TODO: contar doble cover solo si suben por el mismo edge
+        base_leaves = []
+        #TODO: contar cover solo si suben por el mismo edge
         for node_pos,node_tuple in enumerate(nodes):
             _,base_node,_,_,ancestors=node_tuple
             if base_node not in ancestors_cover:
+                base_leaves.append(base_node)
                 ancestors_cover[base_node] = []
             ancestors_cover[base_node].append(node_pos)
             n_heads = {}
@@ -382,21 +394,18 @@ class Hypergraph:
         assert len(heads)==1
 
         # eliminar invalid covers
-        print len(ancestors_cover)
+        #print len(ancestors_cover)
         valid_covers = dict([(tuple(range(i,j)),True) for i in range(len(nodes)+1) for j in range(i+1,len(nodes)+1)]) # only ordered covers
         ancestors_keys = ancestors_cover.keys()
         for n_idx in ancestors_keys:
             if tuple(ancestors_cover[n_idx]) not in valid_covers:
                 ancestors_cover.pop(n_idx)
-        print len(ancestors_cover)
-        #sys.exit()
-
+        #print len(ancestors_cover)
         # print heads
-        # if 380257 in ancestors_cover:
-        #     print ancestors_cover[380257]
-            
 
         raw_consensus = []
+        dead_ends = {}
+        node_dependency = {}
         to_process = dict([ (n_idx,range(len(nodes))) for n_idx in heads ])
         next_to_process = {}
         while len(to_process)>0:
@@ -404,6 +413,7 @@ class Hypergraph:
             for n_idx,coverage in to_process.items():
                 #print n_idx,coverage
                 coverage.sort()
+                node_dependency[n_idx]=[]
                 valid_uphill_edge = False
                 for _,sons,_ in self.__nodes__[n_idx].getSons():
                     n_cover = []
@@ -415,15 +425,19 @@ class Hypergraph:
                     #print "->",sons,n_cover
                     if sorted(sum(n_cover,[]))==coverage:
                         valid_uphill_edge = True
-                        print n_idx,coverage,"->",sons,n_cover
+                        node_dependency[n_idx].append((sons,n_cover))
+                        #print n_idx,coverage,"->",sons,n_cover
                         for s_pos in range(len(sons)):
                             if n_cover[s_pos]!=[] and sons[s_pos]!=n_idx:
                                 if sons[s_pos] not in next_to_process and sons[s_pos] not in to_process and sons[s_pos] not in raw_consensus:
                                     next_to_process[sons[s_pos]] = n_cover[s_pos]
                 if valid_uphill_edge:
                     raw_consensus.append(n_idx)
+                else:
+                    dead_ends[n_idx]=True
             to_process = next_to_process
-            next_to_process = {}
+            next_to_process = {}        
+
         seen = {}
         for _,base_node,_,_,_ in nodes:
             seen[base_node]=True
@@ -432,8 +446,35 @@ class Hypergraph:
             if n_idx not in seen:
                 consensus.append(n_idx)
                 seen[n_idx] = True
-                
-        return sorted(consensus),ancestors_cover
+        consensus.sort()
+
+        #flag detectando si al menos hay una derivacion comun
+        #print dead_ends
+        clean_consensus=[]
+        for n_idx in consensus:
+            dependencies = node_dependency[n_idx]
+            #print n_idx,dependencies
+            alive=False
+            for sons,n_cover in dependencies: 
+                # hijos con coverage no en dead_ends
+                edge_alive = True
+                being_inspected = [sons[s_pos] for s_pos in range(len(sons)) if n_cover[s_pos]!=[]]
+                for s_idx in being_inspected:
+                    if s_idx in dead_ends and s_idx not in base_leaves:
+                        edge_alive=False
+                        break
+                if edge_alive:
+                    alive = True
+                    break
+            #print alive
+            if alive:
+                clean_consensus.append(n_idx)
+            else:
+                dead_ends[n_idx]=True
+        print len(consensus),len(clean_consensus)
+        common_derivation=(len(clean_consensus)!=0)
+
+        return common_derivation,consensus,ancestors_cover
     #---------------------------------------------------    
 
 
@@ -456,12 +497,12 @@ class Hypergraph:
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
                         max_coverage = step_cover
-                        print "S1:",next_idx,sons,step_lsc,step_cover
+                        #print "S1:",next_idx,sons,step_lsc,step_cover
                     elif len(step_cover)==len(max_coverage) and step_lsc>max_step_lsc:
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
                         max_coverage = step_cover
-                        print "S2:",next_idx,sons,step_lsc,step_cover
+                        #print "S2:",next_idx,sons,step_lsc,step_cover
                     break
         rhs,sons,edge_lsc = max_edge
         if not rhs: # some nodes in consensus are not valid
@@ -484,10 +525,9 @@ class Hypergraph:
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
         # TODO: search for best nodes and obtain consensus derivation
-        nodes_list = self.__searchBestNodesMatch__(isles_s)
+        nodes_list,consensus,ancestors_coverage = self.__searchBestNodesMatch__(isles_s)
         #print nodes_list
-        consensus,ancestors_coverage = self.__consensusDerivation__(nodes_list)
-        print consensus
+        #print consensus
 
         mod_covered_strings = {}
         for segm_pos,segm_tuple in enumerate(nodes_list):
@@ -499,9 +539,9 @@ class Hypergraph:
             next_covered_string,step_lsc,next_cover = self.__uphill_derivation__(next_idx,mod_covered_strings)
             if next_covered_string and sorted(next_cover)==ancestors_coverage[next_idx]: # some nodes in consensus are not valid
                 mod_covered_strings[next_idx] =(next_covered_string,next_cover)
-                print "C:",next_idx,next_cover,next_covered_string
-            else:
-                print "Cover:",next_idx,next_cover,"-",ancestors_coverage[next_idx]
+            #     print "C:",next_idx,next_cover,next_covered_string
+            # else:
+            #     print "Cover:",next_idx,next_cover,"-",ancestors_coverage[next_idx]
         assert len(next_cover)==len(nodes_list)
         # try:
         #     assert len(next_cover)==len(nodes_list)
@@ -627,7 +667,7 @@ def user(tra_s, ref_s):
     ref_pos = tra_pos = mouse_actions = strokes = 0
     add_feedback = end_interaction = True
     for ed_op in ed_path:
-        print ed_op,ref_s[ref_pos],tra_s[tra_pos]
+        #print ed_op,ref_s[ref_pos],tra_s[tra_pos]
         if ed_op == "S":
             if ref_s[ref_pos]==tra_s[tra_pos]:
                 isles.append(ref_s[ref_pos])
@@ -730,7 +770,7 @@ for s_idx in range(len(sources)):
     sys.stderr.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    if s_idx<8:
+    if s_idx<0:
         continue
 
     user_isles_s = []
