@@ -270,11 +270,12 @@ class Hypergraph:
                 #     max_lsc = cur_lsc
                 #     max_itp_lsc = itp_lsc
                 #     max_node = n_idx
-                if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[-1][0]:
+                if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[0][0]:
                     nbest_nodes.append((cur_lsc,itp_lsc,n_idx))
                     nbest_nodes = sorted(nbest_nodes)[-segm_best:]
+                    #print nbest_nodes
         #return max_lsc,max_itp_lsc,max_node
-        return nbest_nodes[-1]
+        return nbest_nodes[0]
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -327,18 +328,35 @@ class Hypergraph:
         first_segm = True
         segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
         stack=[]
-        for segm_idx in range(len(segm_list)):
+        segm_idx = 0
+        segm_best = 1
+        while segm_idx < len(segm_list):
             segm_s = segm_list[segm_idx]
-            segm_best = 1
             ec_lsc,itp_lsc,base_node = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
-            first_segm = False
             bn_ancestors,bn_siblings = self.__family__(base_node)
-            valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
-            print len(valid_nodes),segm_s
-            #common_ancestors = [n_idx for n_idx in bn_ancestors if n_idx in common_ancestors]
-            # TODO: backtracking if valid_nodes vacio
-
-            nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc,bn_ancestors))
+            bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
+            #print base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1)
+            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best: 
+                # dejamos al menos tantos nodos como segmentos quedan
+                segm_best+=1
+                ec_lsc,itp_lsc,base_node = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
+                bn_ancestors,bn_siblings = self.__family__(base_node)
+                bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
+                #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1)
+            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1): # backtracking
+                segm_idx,valid_nodes,segm_best=stack.pop()
+                nodes_list.pop()
+                segm_best+=1
+                #print "bt:",segm_idx,segm_list[segm_idx],segm_best,len(valid_nodes)
+                #print nodes_list
+            else:
+                stack.append((segm_idx,valid_nodes,segm_best))
+                nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc,bn_ancestors))
+                valid_nodes = bn_valid_nodes
+                print len(valid_nodes),base_node,segm_best,segm_s
+                first_segm = False
+                segm_idx += 1
+                segm_best = 1
         return nodes_list
     #---------------------------------------------------
 
@@ -397,7 +415,7 @@ class Hypergraph:
                     #print "->",sons,n_cover
                     if sorted(sum(n_cover,[]))==coverage:
                         valid_uphill_edge = True
-                        #print n_idx,coverage,"->",sons,n_cover
+                        print n_idx,coverage,"->",sons,n_cover
                         for s_pos in range(len(sons)):
                             if n_cover[s_pos]!=[] and sons[s_pos]!=n_idx:
                                 if sons[s_pos] not in next_to_process and sons[s_pos] not in to_process and sons[s_pos] not in raw_consensus:
@@ -438,12 +456,12 @@ class Hypergraph:
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
                         max_coverage = step_cover
-                        #print "S1:",next_idx,sons,step_lsc,step_cover
+                        print "S1:",next_idx,sons,step_lsc,step_cover
                     elif len(step_cover)==len(max_coverage) and step_lsc>max_step_lsc:
                         max_edge = son_tuple
                         max_step_lsc = step_lsc
                         max_coverage = step_cover
-                        #print "S2:",next_idx,sons,step_lsc,step_cover
+                        print "S2:",next_idx,sons,step_lsc,step_cover
                     break
         rhs,sons,edge_lsc = max_edge
         if not rhs: # some nodes in consensus are not valid
@@ -469,21 +487,21 @@ class Hypergraph:
         nodes_list = self.__searchBestNodesMatch__(isles_s)
         #print nodes_list
         consensus,ancestors_coverage = self.__consensusDerivation__(nodes_list)
-        #print consensus
+        print consensus
 
         mod_covered_strings = {}
         for segm_pos,segm_tuple in enumerate(nodes_list):
             segm_s,base_node,_,_,_ = segm_tuple
             mod_covered_strings[base_node]=(" ".join(segm_s),[segm_pos])
 
-        #print mod_covered_strings
+        print mod_covered_strings
         for next_idx in consensus:
             next_covered_string,step_lsc,next_cover = self.__uphill_derivation__(next_idx,mod_covered_strings)
             if next_covered_string and sorted(next_cover)==ancestors_coverage[next_idx]: # some nodes in consensus are not valid
                 mod_covered_strings[next_idx] =(next_covered_string,next_cover)
-                #print "C:",next_idx,next_cover,next_covered_string
-            # else:
-            #     print "Cover:",next_idx,next_cover,"-",ancestors_coverage[next_idx]
+                print "C:",next_idx,next_cover,next_covered_string
+            else:
+                print "Cover:",next_idx,next_cover,"-",ancestors_coverage[next_idx]
         assert len(next_cover)==len(nodes_list)
         # try:
         #     assert len(next_cover)==len(nodes_list)
@@ -609,7 +627,7 @@ def user(tra_s, ref_s):
     ref_pos = tra_pos = mouse_actions = strokes = 0
     add_feedback = end_interaction = True
     for ed_op in ed_path:
-        #print ed_op,ref_s[ref_pos],tra_s[tra_pos]
+        print ed_op,ref_s[ref_pos],tra_s[tra_pos]
         if ed_op == "S":
             if ref_s[ref_pos]==tra_s[tra_pos]:
                 isles.append(ref_s[ref_pos])
@@ -712,7 +730,7 @@ for s_idx in range(len(sources)):
     sys.stderr.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    if s_idx<0:
+    if s_idx<8:
         continue
 
     user_isles_s = []
