@@ -275,7 +275,10 @@ class Hypergraph:
                     nbest_nodes = sorted(nbest_nodes)[-segm_best:]
                     #print nbest_nodes
         #return max_lsc,max_itp_lsc,max_node
-        return nbest_nodes[0]
+        still_more_options = True
+        if len(nbest_nodes)<segm_best:
+            still_more_options = False
+        return nbest_nodes[0],still_more_options
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -332,18 +335,18 @@ class Hypergraph:
         segm_best = 1
         while segm_idx < len(segm_list):
             segm_s = segm_list[segm_idx]
-            ec_lsc,itp_lsc,base_node = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
+            (ec_lsc,itp_lsc,base_node),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
             bn_ancestors,bn_siblings = self.__family__(base_node)
             bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
-            #print base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1)
-            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best: 
+            #print base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
+            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best and still_more_nodes: 
                 # dejamos al menos tantos nodos como segmentos quedan
                 segm_best+=1
-                ec_lsc,itp_lsc,base_node = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
+                (ec_lsc,itp_lsc,base_node),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
                 bn_ancestors,bn_siblings = self.__family__(base_node)
                 bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
-                #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1)
-            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1): # backtracking
+                #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
+            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) or not still_more_nodes: # backtracking
                 segm_idx,valid_nodes,segm_best=stack.pop()
                 nodes_list.pop()
                 segm_best+=1
@@ -472,7 +475,12 @@ class Hypergraph:
             else:
                 dead_ends[n_idx]=True
         print len(consensus),len(clean_consensus)
-        common_derivation=(len(clean_consensus)!=0)
+
+        # TODO: ademas derivacion para cada base_leave, no solo para una
+        #common_derivation = (len(clean_consensus)!=0)
+        common_derivation = False
+        for n_idx in heads:
+            common_derivation = common_derivation or (n_idx in clean_consensus)
 
         return common_derivation,consensus,ancestors_cover
     #---------------------------------------------------    
