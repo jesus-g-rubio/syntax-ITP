@@ -688,7 +688,7 @@ def lev_path(s1, s2):
 ###############################################################
 ##  Function that computes user feedback
 ###############################################################
-def user(tra_s, ref_s, mapi):
+def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
     assert len(ed_path.replace('D',''))==len(tra_s) # do not take into account deleted reference words
 
@@ -732,31 +732,13 @@ def user(tra_s, ref_s, mapi):
                     add_feedback = False
                     strokes += 1
                     user_stroke_pos = len(isles)-1
+                    
             else:
                 end_interaction = False
                 if len(isles)==0 or isles[-1]!="<+>":
                     isles.append('<+>')
             ref_pos += 1
-    
-    # Mouse-actions limitation
-    #print isles
-    aux = isles
-    isles = []
-    cont = 0
-    count_ma = False
-    for w_pos in range(len(aux)):
-        w=aux[w_pos]
-        if not count_ma and (w=="<+>" or w_pos==user_stroke_pos):
-            count_ma = True
-        elif count_ma:
-            cont +=1
-        if cont <= mapi:
-            isles.append(w)
-        else:
-            break
-    if len(isles)<len(aux) and isles[-1]!="<+>":
-        isles.append("<+>")
-    #print isles
+            
     return isles,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
 ###############################################################    
 ###############################################################
@@ -768,8 +750,8 @@ def user(tra_s, ref_s, mapi):
 ##   MAIN entry to the program
 ###############################################################
 ###############################################################
-if len(sys.argv)!=7:
-    sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference> <err_w> <err_p> <mouse-actions-per-iteration>\n")
+if len(sys.argv)!=6:
+    sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference> <err_w> <err_p>\n")
     sys.exit()
 
 file_name_hypergraph = sys.argv[1]
@@ -804,12 +786,6 @@ if err_p>=1:
     sys.stderr.write("# Error probability rounded to 0.99999\n")
     err_p = 0.99999
 
-
-mapi = int(sys.argv[6])
-if mapi<0:
-    mapi = 0
-    sys.stderr.write("# Mouse-actions per iteration rounded to 0\n")
-
 ########################################################################
 # no need for individua scores, simple formulation
 ########################################################################
@@ -843,7 +819,7 @@ for s_idx in range(len(sources)):
         ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
-        user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s, mapi)
+        user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s)
         strokes += ws
 
         # output trace
