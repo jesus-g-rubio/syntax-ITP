@@ -126,6 +126,7 @@ class Hypergraph:
     #---------------------------------------------------
     def __init__(self):
         self.__patt__="^\d+[ ]+([\d>\-]+)[ ]+[SX][ ]+\->(.+)[ ]+:[\d \-]*:[ ]+c=([e\.\d\-]+)[ ]+core=\([e\.,\d\-]+\)[ ]+\[\d+\.\.\d+\][ ]*([ \d]+)[ ]*\[total=([e\.\d\-]+)\].*$"
+        self.__max_backtrack_iters__ = 2
 
         self.__regexp__ = re.compile(self.__patt__)
         self.__nodes__ = {}
@@ -319,6 +320,8 @@ class Hypergraph:
     #---------------------------------------------------
     # return a list with the best matching nodes
     def __searchBestNodesMatch__(self, isles_s):
+        sys.stderr.write("# Searching for best derivation ... ")
+        init_time = time.time()
         if len(isles_s)==0:
             #node=self.__nodes__[self.__init_node__]
             #ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
@@ -326,7 +329,7 @@ class Hypergraph:
             isles_s = ['<s>']
         
         # backtracking to obtain best set of nodes
-        valid_nodes = sorted(self.__nodes__)
+        valid_nodes = [ n_idx for n_idx in sorted(self.__nodes__) if len(self.__nodes__[n_idx].getParents())>0 ]
         nodes_list = []
         first_segm = True
         segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
@@ -339,24 +342,31 @@ class Hypergraph:
             bn_ancestors,bn_siblings = self.__family__(base_node)
             bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
             #print base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
-            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best and still_more_nodes: 
+            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best and still_more_nodes and segm_best<self.__max_backtrack_iters__: 
                 # dejamos al menos tantos nodos como segmentos quedan
                 segm_best+=1
                 (ec_lsc,itp_lsc,base_node),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
                 bn_ancestors,bn_siblings = self.__family__(base_node)
                 bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
                 #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
-            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) or not still_more_nodes: # backtracking
-                segm_idx,valid_nodes,segm_best=stack.pop()
-                nodes_list.pop()
-                segm_best+=1
+            #print segm_best,self.__max_backtrack_iters__
+            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) or not still_more_nodes or segm_best>=self.__max_backtrack_iters__: # backtracking
+                try:
+                    segm_idx,valid_nodes,segm_best,first_segm=stack.pop()
+                    nodes_list.pop()
+                    segm_best+=1
+                except IndexError:
+                    self.__max_backtrack_iters__ += 1
+                    first_segm = True
+                    sys.stderr.write("#")
+                sys.stderr.write(str(segm_idx))
                 #print "bt:",segm_idx,segm_list[segm_idx],segm_best,len(valid_nodes)
                 #print nodes_list
             else:
-                stack.append((segm_idx,valid_nodes,segm_best))
+                stack.append((segm_idx,valid_nodes,segm_best,first_segm))
                 nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc,bn_ancestors))
                 valid_nodes = bn_valid_nodes
-                print len(valid_nodes),base_node,segm_best,segm_s
+                #print len(valid_nodes),base_node,segm_best,segm_s
                 first_segm = False
                 segm_idx += 1
                 segm_best = 1
@@ -365,12 +375,19 @@ class Hypergraph:
                 #TODO: include consensus derivation in backtracking
                 common_derivation,consensus,ancestors_coverage = self.__consensusDerivation__(nodes_list)
                 if common_derivation:
+                    self.__max_backtrack_iters__ = 2
+                    timestamp = time.time()-init_time
+                    sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n")
                     return nodes_list,consensus,ancestors_coverage
                 else:
                     # backtracking because no common derivation
-                    segm_idx,valid_nodes,segm_best=stack.pop()
-                    nodes_list.pop()
-                    segm_best+=1
+                    try:
+                        segm_idx,valid_nodes,segm_best,first_segm=stack.pop()
+                        nodes_list.pop()
+                        segm_best+=1
+                    except IndexError:
+                        self.__max_backtrack_iters__ += 1
+                        first_segm = True
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -394,7 +411,13 @@ class Hypergraph:
                 if len(self.__nodes__[n_idx].getParents())==0:
                     n_heads[n_idx]=True
             heads = dict([(n_idx,True) for n_idx in n_heads if n_idx in heads])
-        assert len(heads)==1
+        try:
+            assert len(heads)>0
+        except AssertionError:
+            print nodes
+            print heads
+            #return False,[],ancestors_cover
+            sys.exit()
 
         # eliminar invalid covers
         #print len(ancestors_cover)
@@ -474,7 +497,7 @@ class Hypergraph:
                 clean_consensus.append(n_idx)
             else:
                 dead_ends[n_idx]=True
-        print len(consensus),len(clean_consensus)
+        #print len(consensus),len(clean_consensus)
 
         # TODO: ademas derivacion para cada base_leave, no solo para una
         #common_derivation = (len(clean_consensus)!=0)
@@ -542,7 +565,7 @@ class Hypergraph:
             segm_s,base_node,_,_,_ = segm_tuple
             mod_covered_strings[base_node]=(" ".join(segm_s),[segm_pos])
 
-        print mod_covered_strings
+        #print mod_covered_strings
         for next_idx in consensus:
             next_covered_string,step_lsc,next_cover = self.__uphill_derivation__(next_idx,mod_covered_strings)
             if next_covered_string and sorted(next_cover)==ancestors_coverage[next_idx]: # some nodes in consensus are not valid
@@ -669,11 +692,12 @@ def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
     assert len(ed_path.replace('D',''))==len(tra_s) # do not take into account deleted reference words
 
-    print ed_cost,ed_path
+    #print ed_cost,ed_path
     isles = []
     user_feedback = []
     ref_pos = tra_pos = mouse_actions = strokes = 0
     add_feedback = end_interaction = True
+    user_stroke_pos = None
     for ed_op in ed_path:
         #print ed_op,ref_s[ref_pos],tra_s[tra_pos]
         if ed_op == "S":
@@ -685,6 +709,7 @@ def user(tra_s, ref_s):
                 isles.append(ref_s[ref_pos])
                 add_feedback = False
                 strokes += 1
+                user_stroke_pos = len(isles)-1
                 user_feedback.append("W")
             else:
                 user_feedback.append('E')
@@ -701,13 +726,14 @@ def user(tra_s, ref_s):
                 isles.append(ref_s[ref_pos])
                 add_feedback = False
                 strokes += 1
+                user_stroke_pos = len(isles)-1
             else:
                 end_interaction = False
                 if len(isles)==0 or isles[-1]!="<+>":
                     isles.append('<+>')
             ref_pos += 1
             
-    return isles,user_feedback,end_interaction,mouse_actions,strokes
+    return isles,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
 ###############################################################    
 ###############################################################
 
@@ -775,8 +801,8 @@ for s_idx in range(len(sources)):
         sys.exit()
 
     timestamp = time.time()-init_time
-    sys.stderr.write("Src "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
-    sys.stderr.write("Ref "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
+    sys.stderr.write("SRC "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
+    sys.stderr.write("REF "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
     if s_idx<0:
         continue
@@ -787,25 +813,31 @@ for s_idx in range(len(sources)):
         ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
-        user_isles_s,user_feedback,end_interaction,ma,ws = user(tra_s, ref_s)
+        user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s)
         strokes += ws
 
         # output trace
         timestamp = time.time()-init_time
-        sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
-
+        #sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+"\n")
+        sys.stderr.write("TRA "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(tra_s)+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
+        
+        aux_out = user_isles_s[:]
+        if user_stroke_pos:
+            aux_out[user_stroke_pos] = "["+aux_out[user_stroke_pos]+"]"
+        sys.stderr.write("# ISLE: "+" ".join(aux_out)+"\n")
+        
         #print "T:",tra_s
         #print "R:",ref_s
-        print " --> I:"," ".join(user_isles_s)
+        #print " --> I:"," ".join(user_isles_s)
         #print "U:",user_feedback,end_interaction
 
         if end_interaction:
-            mouse_actions += ma
+            mouse_actions += (ma-strokes)
             word_strokes += strokes
             ref_words += len(ref_s)
             wsmr = (word_strokes+mouse_actions)/float(ref_words)
             wsr = word_strokes/float(ref_words)
-            sys.stderr.write("# cur: "+str((user_feedback.count("S"),strokes,ma)))
+            sys.stderr.write("#------> cur: "+str((user_feedback.count("S"),strokes,ma)))
             sys.stderr.write(" ws: "+str(word_strokes)+" ma: "+str(mouse_actions)+" rw: "+str(ref_words))
             sys.stderr.write(" -> wsr: "+str(wsr)+" wsmr: "+str(wsmr)+"\n")
             break
