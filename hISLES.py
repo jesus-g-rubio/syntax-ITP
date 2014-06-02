@@ -676,7 +676,7 @@ def lev_path(s1, s2):
             insertions = (previous_row[j+1] + 1, previous_ed[j+1]+'I') 
             deletions = (current_row[j] + 1, current_ed[j]+'D')       
             substitutions = (previous_row[j] + (c1!=c2), previous_ed[j]+'S')
-            edit_op = min(insertions, deletions, substitutions)
+            edit_op = min(substitutions, insertions, deletions)
             current_row.append(edit_op[0])
             current_ed.append(edit_op[1])
 
@@ -692,6 +692,8 @@ def user(tra_s, ref_s):
     ed_cost,ed_path = lev_path(tra_s,ref_s)
     assert len(ed_path.replace('D',''))==len(tra_s) # do not take into account deleted reference words
 
+    #print ref_s
+    #print tra_s
     #print ed_cost,ed_path
     isles = []
     user_feedback = []
@@ -699,7 +701,7 @@ def user(tra_s, ref_s):
     add_feedback = end_interaction = True
     user_stroke_pos = None
     for ed_op in ed_path:
-        #print ed_op,ref_s[ref_pos],tra_s[tra_pos]
+        #print ed_op,ref_pos,ref_s[ref_pos],tra_pos,tra_s[tra_pos]
         if ed_op == "S":
             if ref_s[ref_pos]==tra_s[tra_pos]:
                 isles.append(ref_s[ref_pos])
@@ -721,12 +723,16 @@ def user(tra_s, ref_s):
         elif ed_op == 'I':
             user_feedback.append('E')
             tra_pos += 1
-        else: # Deleted reference word
-            if add_feedback: 
+        else: # Deleted reference word TODO, what if deleted is equal?
+            if add_feedback:
                 isles.append(ref_s[ref_pos])
-                add_feedback = False
-                strokes += 1
-                user_stroke_pos = len(isles)-1
+                if ref_pos<len(ref_s) and tra_pos<len(tra_s) and ref_s[ref_pos]==tra_s[tra_pos]:
+                    mouse_actions += 1
+                else:
+                    add_feedback = False
+                    strokes += 1
+                    user_stroke_pos = len(isles)-1
+                    
             else:
                 end_interaction = False
                 if len(isles)==0 or isles[-1]!="<+>":
