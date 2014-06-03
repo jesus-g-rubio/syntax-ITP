@@ -819,31 +819,54 @@ for s_idx in range(len(sources)):
         ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
-        user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s)
-        strokes += ws
+        #user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s)
+        #strokes += ws
+        
+        # calcular prefijo
+        common_prefix_s = []
+        for w_pos in range(min(len(ref_s),len(tra_s))):
+            if ref_s[w_pos] == tra_s[w_pos]:
+                common_prefix_s.append(ref_s[w_pos])
+            else:
+                break
 
+        # island computation
+        if len(common_prefix_s)<len(ref_s):
+            user_isles_s = common_prefix_s + [ref_s[len(common_prefix_s)]]
+            strokes += 1
+            if len(user_isles_s) == len(ref_s):
+                end_interaction = True
+                user_stroke_pos = -1
+            else:
+                end_interaction = False
+                user_isles_s.append("<+>")
+                user_stroke_pos = -2
+        else:
+            user_isles_s = common_prefix_s[:]
+            end_interaction = True
+        
         # output trace
         timestamp = time.time()-init_time
         #sys.stderr.write("Tra ( "+str(timestamp)+" ): "+" ".join([tra_s[pos]+"<"+user_feedback[pos]+">" for pos in range(len(tra_s))])+"\n")
         sys.stderr.write("TRA "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(tra_s)+" ||| "+str(ec_lsc)+" ("+str(itp_lsc)+")\n")
-        
+
         aux_out = user_isles_s[:]
         if user_stroke_pos:
             aux_out[user_stroke_pos] = "["+aux_out[user_stroke_pos]+"]"
         sys.stderr.write("# ISLE: "+" ".join(aux_out)+"\n")
-        
+
         #print "T:",tra_s
         #print "R:",ref_s
         #print " --> I:"," ".join(user_isles_s)
         #print "U:",user_feedback,end_interaction
 
         if end_interaction:
-            mouse_actions += (ma-strokes)
+            mouse_actions += len(ref_s)-strokes
             word_strokes += strokes
             ref_words += len(ref_s)
             wsmr = (word_strokes+mouse_actions)/float(ref_words)
             wsr = word_strokes/float(ref_words)
-            sys.stderr.write("#------> cur: "+str((user_feedback.count("S"),strokes,ma)))
+            sys.stderr.write("#------> cur: "+str((strokes,len(ref_s)-strokes)))
             sys.stderr.write(" ws: "+str(word_strokes)+" ma: "+str(mouse_actions)+" rw: "+str(ref_words))
             sys.stderr.write(" -> wsr: "+str(wsr)+" wsmr: "+str(wsmr)+"\n")
             break

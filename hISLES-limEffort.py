@@ -746,7 +746,7 @@ def user(tra_s, ref_s, mapi):
     count_ma = False
     for w_pos in range(len(aux)):
         w=aux[w_pos]
-        if not count_ma and (w=="<+>" or w_pos==user_stroke_pos):
+        if not count_ma and w=="<+>":
             count_ma = True
         elif count_ma:
             cont +=1
