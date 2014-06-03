@@ -738,26 +738,57 @@ def user(tra_s, ref_s, mapi):
                     isles.append('<+>')
             ref_pos += 1
     
-    # Mouse-actions limitation
-    #print isles
-    aux = isles
-    isles = []
-    cont = 0
-    count_ma = False
-    for w_pos in range(len(aux)):
-        w=aux[w_pos]
-        if not count_ma and w=="<+>":
-            count_ma = True
-        elif count_ma:
-            cont +=1
-        if cont <= mapi:
-            isles.append(w)
+    # calcular prefijo
+    common_prefix_s = []
+    for w_pos in range(min(len(ref_s),len(tra_s))):
+        if ref_s[w_pos] == tra_s[w_pos]:
+            common_prefix_s.append(ref_s[w_pos])
         else:
             break
-    if len(isles)<len(aux) and isles[-1]!="<+>":
-        isles.append("<+>")
-    #print isles
-    return isles,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
+
+    if len(common_prefix_s)<len(ref_s):
+        user_stroke_pos = len(common_prefix_s)
+        common_prefix_s.append(ref_s[len(common_prefix_s)])
+    
+    print common_prefix_s
+    max_isles_pos = len(common_prefix_s)+mapi
+    isles_limited_effort_s = []
+    contar_mapi = False
+    cont = cont_mapi = 0
+    for w in isles:
+        if cont<max_isles_pos and cont_mapi<=mapi:
+            isles_limited_effort_s.append(w)
+            if w!="<+>":
+                cont += 1
+                if contar_mapi:
+                    cont_mapi += 1
+            else:
+                contar_mapi = True
+        else:
+            break
+    print isles_limited_effort_s
+    isles_lim_effort_prefix = []
+    for w in isles_limited_effort_s:
+        if w!="<+>":
+            isles_lim_effort_prefix.append(w)
+        else:
+            break
+    print isles_lim_effort_prefix
+    lim_strokes = 0
+    if len(isles_lim_effort_prefix)==len(ref_s):
+        end_interaction = True
+    else:
+        end_interaction = False
+        lim_strokes = 1
+    strokes = max(lim_strokes,strokes)
+
+    if not end_interaction and isles_limited_effort_s[-1]!="<+>":
+        isles_limited_effort_s.append("<+>")
+    
+        
+        
+    #return isles,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
+    return isles_limited_effort_s,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
 ###############################################################    
 ###############################################################
 
