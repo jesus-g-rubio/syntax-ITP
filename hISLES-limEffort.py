@@ -745,47 +745,35 @@ def user(tra_s, ref_s, mapi):
             common_prefix_s.append(ref_s[w_pos])
         else:
             break
-
-    if len(common_prefix_s)<len(ref_s):
-        user_stroke_pos = len(common_prefix_s)
-        common_prefix_s.append(ref_s[len(common_prefix_s)])
     
-    print common_prefix_s
-    max_isles_pos = len(common_prefix_s)+mapi
-    isles_limited_effort_s = []
-    contar_mapi = False
-    cont = cont_mapi = 0
-    for w in isles:
-        if cont<max_isles_pos and cont_mapi<=mapi:
+
+    isles_limited_effort_s = common_prefix_s[:]
+    if len(common_prefix_s)<len(ref_s) and len(common_prefix_s) < len(isles) and isles[len(common_prefix_s)]=="<+>":
+        isles_limited_effort_s.append(ref_s[len(common_prefix_s)])
+             
+    skipped_first_isle = False
+    used_ma = 0
+    #end_interaction = True
+    for w_pos in range(len(isles)):
+        w = isles[w_pos]
+        if w=="<+>" or w_pos==len(common_prefix_s):
+            skipped_first_isle=True
+        if skipped_first_isle and used_ma<=mapi:
             isles_limited_effort_s.append(w)
             if w!="<+>":
-                cont += 1
-                if contar_mapi:
-                    cont_mapi += 1
+                used_ma += 1
             else:
-                contar_mapi = True
-        else:
-            break
-    print isles_limited_effort_s
-    isles_lim_effort_prefix = []
-    for w in isles_limited_effort_s:
-        if w!="<+>":
-            isles_lim_effort_prefix.append(w)
-        else:
-            break
-    print isles_lim_effort_prefix
-    lim_strokes = 0
-    if len(isles_lim_effort_prefix)==len(ref_s):
-        end_interaction = True
-    else:
+                end_interaction = False
+    if len(isles_limited_effort_s)<len(ref_s):
         end_interaction = False
-        lim_strokes = 1
-    strokes = max(lim_strokes,strokes)
 
-    if not end_interaction and isles_limited_effort_s[-1]!="<+>":
+    #print end_interaction
+    #print common_prefix_s
+    #print isles_limited_effort_s
+    #print ref_s
+    user_stroke_pos = min(user_stroke_pos,len(isles_limited_effort_s)-1)
+    if isles_limited_effort_s[-1]!="<+>":
         isles_limited_effort_s.append("<+>")
-    
-        
         
     #return isles,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
     return isles_limited_effort_s,user_feedback,end_interaction,mouse_actions,strokes,user_stroke_pos
