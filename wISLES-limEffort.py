@@ -125,10 +125,8 @@ class Node:
 class Hypergraph:
     #---------------------------------------------------
     def __init__(self):
-        self.__patt__="^\d+[ ]+([\d>\-]+)[ ]+[SX][ ]+\->(.+)[ ]+:[\d \-]*:[ ]+c=([e\.\d\-]+)[ ]+core=\([e\.,\d\-]+\)[ ]+\[\d+\.\.\d+\][ ]*([ \d]+)[ ]*\[total=([e\.\d\-]+)\].*$"
         self.__max_backtrack_iters__ = 2
 
-        self.__regexp__ = re.compile(self.__patt__)
         self.__nodes__ = {}
         self.__num_edges__ = 0
         self.__no_terminal__ = 'X'
@@ -141,43 +139,74 @@ class Hypergraph:
     #---------------------------------------------------
     # parses a line by regexp
     def __parseLine__(self, line):
-        match = self.__regexp__.match(line)
+        # 0 hyp=5451 stack=2 back=66 score=-6.759 transition=-1.853 recombined=5352 forward=12736 fscore=-15.721 covered=4-4 out=information
+        ls = line.strip().split()
+
+        # skip wordgraph number
+        ls.pop(0) 
         
-        try:
-            data_l = match.groups()
-            assert len(data_l)==5
-        except AttributeError:
-            print line.strip()
-            sys.exit()
+        # node idx
+        f = ls.pop(0)
+        assert f[:4]=="hyp="
+        idx = int(f.strip().split('=')[1])
         
-        aux = data_l[0].strip().split("->")
-        assert len(aux)==1 or len(aux)==2
-        idx = int(aux[0])
+        # stack idx
+        f = ls.pop(0)
+        assert f[:6]=="stack="
+        stack=int(f.strip().split('=')[1])
+        if stack==0: # initial hypothesis
+            return idx,None, ['<s>'], 0.0, [], 0.0,None,float("-inf")
+
+        # sons
+        f = ls.pop(0)
+        assert f[:5]=="back="
+        son = int(f.strip().split("=")[1])
+        sons = [son]
+        
+
+        # inside
+        f = ls.pop(0)
+        assert f[:6]=="score="
+        inside_lsc = float(f.strip().split("=")[1])
+
+        # transition
+        f = ls.pop(0)
+        assert f[:11]=="transition="
+        c_lsc = float(f.strip().split("=")[1])
+
+        # recombined and/or forward
+        f = ls.pop(0)
+        assert f[:11]=="recombined=" or f[:8]=="forward="
         rec = None
-        if len(aux)==2:
-            rec = int(aux[1])
+        if f[:11]=="recombined=":
+            rec = int(f.strip().split("=")[1])
+            f = ls.pop(0)
+        assert f[:8]=="forward="    
+        forw = int(f.strip().split("=")[1])
+        if forw==-1:
+            forw = None
         
-        aux = data_l[1].strip().split() 
-        rhs = []
-        count = 0
-        for w in aux:
-            if w=='S' or w=='X':
-                rhs.append(self.__no_terminal__)
-                count += 1
-            else:
-                rhs.append(w)
+        # forward score
+        f=ls.pop(0)
+        assert f[:7]=="fscore="
+        f_lsc = float(f.strip().split("=")[1])
 
-        sons = [int(w) for w in data_l[3].strip().split()]
-        try:
-            assert len(sons)==count
-        except AssertionError:
-            sys.stderr.write("\nWARNING: shitty line: "+line.strip()+"\n#")
-            sons = []
-            rhs = [w for w in rhs if w!=self.__no_terminal__]
+        # coverage
+        f=ls.pop(0)
+        assert f[:8]=="covered="
 
-        c_lsc = float(data_l[2])
-        inside_lsc = float(data_l[4])
-        return idx, rec, rhs, c_lsc, sons, inside_lsc
+        # rhs
+        f=ls.pop(0)
+        rhs = [self.__no_terminal__]
+        assert f[:4]=="out="
+        rhs.append(f.strip().split("=")[1])
+        while len(ls)>0:
+            rhs.append(ls.pop(0))
+        
+        #print line.strip()
+        #print [idx, rec, rhs, c_lsc, sons, inside_lsc]
+
+        return idx, rec, rhs, c_lsc, sons, inside_lsc, forw, f_lsc
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -200,18 +229,24 @@ class Hypergraph:
         # add new node or update recombined node
         self.__num_edges__ += 1
         try:
-            (idx,rec,rhs,c_lsc,sons,inside_lsc) = self.__parseLine__(line)
+            (idx,rec,rhs,c_lsc,sons,inside_lsc,forward,f_lsc) = self.__parseLine__(line)
         except TypeError:
             return False
 
         edge_lsc = inside_lsc - ( sum( [ self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons ] ) )
+        assert (c_lsc-edge_lsc)**2 < 0.001
 
         if len(rhs)==1 and rhs[0]=="<s>":
             self.__init_node__ = idx
+        else:
+            # actualizamos outside de nodo base
+            if sons[0]==self.__init_node__ and (edge_lsc+f_lsc)>self.__nodes__[self.__init_node__].getOutsideLogScore():
+                self.__nodes__[self.__init_node__].setOutside(idx,edge_lsc+f_lsc)
 
         if rec == None:
             covered_string = self.__stringFromRhs__(rhs,sons)
             new_node = Node(idx, covered_string, rhs, sons, edge_lsc, inside_lsc)
+            new_node.setOutside(forward,f_lsc)
             self.__nodes__[idx] = new_node
             n_idx = idx
         else:
@@ -221,115 +256,138 @@ class Hypergraph:
             self.__nodes__[s_idx].addParent(n_idx,edge_lsc)
     #---------------------------------------------------    
 
-    #---------------------------------------------------
-    # Outside: update outside_lsc and outside parent 
-    def __outside__(self):  
-        ordered_keys = sorted(self.__nodes__, reverse=True)
-        for n_idx in ordered_keys:
-            node=self.__nodes__[n_idx]
-            max_outside_lsc = float("-inf")
-            max_outside_parent = None
-            if node.isHead():
-                node.setOutside(None,0.0)
-            else:
-                for p_idx,p_edge_lsc in node.getParents():
-                    outside_lsc = self.__nodes__[p_idx].getOutsideLogScore()+p_edge_lsc
-                    if outside_lsc>max_outside_lsc:
-                        max_outside_lsc = outside_lsc
-                        max_outside_parent = p_idx
-                node.setOutside(max_outside_parent,max_outside_lsc)
-    #---------------------------------------------------
 
     #---------------------------------------------------
     # configure hypergraph for future ITP requests
     def configure(self, err_w, err_p):
         self.err_w = err_w
         self.err_p = err_p
-        self.__outside__()
     #---------------------------------------------------
 
     #---------------------------------------------------
     # return the best matching node among valid nodes
-    def __searchNbestNodeMatchRestricted__(self, segm_s, segm_best, valid_nodes, is_prefix):
-        # TODO:
+    def __searchNbestNodeMatchRestricted__(self, segm_s, segm_best, valid_nodes, first_isle):
         segm = " ".join(segm_s).strip()
         n = len(segm)
-        # max_lsc = float("-inf")
-        # max_node = None
+        #print "SN:",segm_s, segm_best, len(valid_nodes), first_isle
         
         nbest_nodes = []
         for n_idx in valid_nodes:
-            covered_sent = self.__nodes__[n_idx].getCoveredString().strip()
-            if not is_prefix or (is_prefix and covered_sent[0:3] == "<s>"): 
-                covered_sent = covered_sent.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip()
+            covered_sent_s,inside_lsc = valid_nodes[n_idx]
+            #print n_idx,covered_sent_s,inside_lsc
+            # all nodes represent prefixes
+            # "|||" symbol represents previous matching
+            # search for node whith best EC score on the unmatched suffix
+            if first_isle:
+                covered_sent = " ".join(covered_sent_s).replace("|UNK|UNK|UNK","").replace("</s>","").strip()
                 d = Levenshtein.distance(segm,covered_sent)
                 d = min(d,n)
                 err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
                 itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
                 cur_lsc = itp_lsc+self.err_w*err_lsc #inside x outside x err**err_w
-                # if cur_lsc > max_lsc:
-                #     max_lsc = cur_lsc
-                #     max_itp_lsc = itp_lsc
-                #     max_node = n_idx
                 if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[0][0]:
-                    nbest_nodes.append((cur_lsc,itp_lsc,n_idx))
+                    nbest_nodes.append((cur_lsc,itp_lsc,n_idx,segm_s))
                     nbest_nodes = sorted(nbest_nodes)[-segm_best:]
-                    #print nbest_nodes
+                    #print "P",covered_sent,d,err_lsc,itp_lsc,cur_lsc
+                    #print "P",nbest_nodes
+            else:
+                max_suffix_size = len(covered_sent_s)-covered_sent_s.index("|||")-1
+                for suffix_size in range(1,max_suffix_size):
+                    covered_sent = " ".join(covered_sent_s[-suffix_size:]).replace("|UNK|UNK|UNK","").replace("</s>","").strip()
+                    d = Levenshtein.distance(segm,covered_sent)
+                    d = min(d,n)
+                    err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
+                    itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
+                    cur_lsc = itp_lsc+self.err_w*err_lsc #inside x outside x err**err_w
+                    if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[0][0]:
+                        out_str = covered_sent_s[:-suffix_size]+tuple(segm_s)
+                        nbest_nodes.append((cur_lsc,itp_lsc,n_idx,out_str))
+                        nbest_nodes = sorted(nbest_nodes)[-segm_best:]
+                        #print "I",covered_sent,d,err_lsc,itp_lsc,cur_lsc
+                        #print "I", nbest_nodes
+        #print nbest_nodes
         #return max_lsc,max_itp_lsc,max_node
+        #sys.exit()
         still_more_options = True
         if len(nbest_nodes)<segm_best:
             still_more_options = False
         return nbest_nodes[0],still_more_options
     #---------------------------------------------------
 
+
     #---------------------------------------------------
-    # compute siblings of a given node
-    def __family__(self, n_idx):
+    # compute ancestors of a given node
+    def __ancestors__(self,n_idx,n_str,segm_s):
         ancestors = {} # compute parents
         to_process = dict([(p_tuple[0],True) for p_tuple in self.__nodes__[n_idx].getParents()])
-        first_sons = {}
-        while len(to_process)>0: # compute ancestors
-            c_idx,_ = to_process.popitem()
+        while len(to_process)>0:
+            c_idx = min(to_process.keys())
             for p_idx,_ in self.__nodes__[c_idx].getParents():
                 if p_idx not in to_process and p_idx not in ancestors:
                     to_process[p_idx]=True
             ancestors[c_idx]=True
-        
-        # compute first sons, share edge with ancestor, but not ancestor themselves
-        for c_idx in ancestors:
-            for _,sons,_ in self.__nodes__[c_idx].getSons():
-                if len(sons)==2:
-                    if sons[0] in ancestors or sons[0]==n_idx:
-                        if sons[1] not in ancestors and sons[1] not in first_sons and sons[1]!=n_idx:
-                            first_sons[sons[1]]=True
-                    # elif sons[1] in ancestors or sons[1]==n_idx:
-                    #     if sons[0] not in ancestors and sons[0] not in first_sons and sons[0]!=n_idx:
-                    #         first_sons[sons[0]]=True
-        siblings = {} # compute rest of siblings
-        to_process = first_sons
-        while len(to_process)>0:
-            c_idx,_ = to_process.popitem()
-            for _,sons,_ in self.__nodes__[c_idx].getSons():
-                for s_idx in sons:
-                    if s_idx not in to_process and s_idx not in siblings and s_idx not in ancestors and s_idx!=n_idx:
-                        to_process[s_idx]=True
-            siblings[c_idx]=True
-        return ancestors,siblings
-    #---------------------------------------------------    
+            del to_process[c_idx]
+
+        # compute best inside string
+        anc_info={}
+        anc_info[n_idx]=(tuple(list(n_str)+["|||"]),self.__nodes__[n_idx].getInsideLogScore())
+        ancestor_idxs=sorted(ancestors.keys())
+        #print n_idx,n_str,segm_s
+        #print len(ancestor_idxs)
+        #print ancestor_idxs
+        while len(ancestor_idxs)>0:
+            c_idx = ancestor_idxs.pop(0)
+            #print c_idx
+            max_lsc = float("-inf")
+            early_stop=False
+            for rhs,sons,edge_lsc in self.__nodes__[c_idx].getSons():
+                if len(sons)==1 and (sons[0] in ancestors or sons[0]==n_idx):
+                    #print rhs,sons,edge_lsc
+                    s_idx = sons[0]
+                    if s_idx in anc_info:
+                        s_str_s,s_inside_lsc = anc_info[s_idx]
+                    else:
+                        if c_idx not in ancestor_idxs:
+                            ancestor_idxs.append(c_idx)
+                        early_stop = True
+                        break
+                        
+                    new_lsc = s_inside_lsc + edge_lsc
+                    #print s_str_s,rhs
+                    if new_lsc>max_lsc:
+                        max_str_s = s_str_s + rhs[1:]
+                        max_lsc = new_lsc
+                        max_idx = s_idx
+            try:
+                anc_info[c_idx] = (max_str_s,max_lsc)
+            except UnboundLocalError:
+                if not early_stop:
+                    print self.__nodes__[c_idx]
+                    sys.exit()
+            #print c_idx,max_idx,anc_info[c_idx]
+            #print "-----------------------"
+
+        del anc_info[n_idx]
+        return anc_info
+    #---------------------------------------------------
 
     #---------------------------------------------------
     # return a list with the best matching nodes
-    def __searchBestNodesMatch__(self, isles_s):
+    def __searchBestEcTranslation__(self, isles_s):
         sys.stderr.write("# Searching for best derivation ... ")
         init_time = time.time()
         if len(isles_s)==0:
-            #node=self.__nodes__[self.__init_node__]
-            #ec_lsc = node.getInsideLogScore()+node.getOutsideLogScore()
-            #return [([],self.__init_node__,ec_lsc,ec_lsc)]
             isles_s = ['<s>']
         
         # backtracking to obtain best set of nodes
-        valid_nodes = [ n_idx for n_idx in sorted(self.__nodes__) if len(self.__nodes__[n_idx].getParents())>0 ]
+        #print "------------"
+        #print "Isles:",isles_s
+        valid_nodes = {}
+        for n_idx in sorted(self.__nodes__):
+            valid_nodes[n_idx] = (tuple(self.__nodes__[n_idx].getCoveredString().strip().split()),self.__nodes__[n_idx].getInsideLogScore())
+            # if len(self.__nodes__[n_idx].getParents())>0:
+            #     valid_nodes[n_idx] = (tuple(self.__nodes__[n_idx].getCoveredString().strip().split()),self.__nodes__[n_idx].getInsideLogScore())
+
         nodes_list = []
         first_segm = True
         segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
@@ -338,16 +396,30 @@ class Hypergraph:
         segm_best = 1
         while segm_idx < len(segm_list):
             segm_s = segm_list[segm_idx]
-            (ec_lsc,itp_lsc,base_node),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
-            bn_ancestors,bn_siblings = self.__family__(base_node)
-            bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
-            #print base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
+            (ec_lsc,itp_lsc,base_node,base_node_str),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
+            bn_ancestors = self.__ancestors__(base_node,base_node_str,segm_s)
+            bn_valid_nodes = {}
+            for n_idx in bn_ancestors:
+                if n_idx in valid_nodes:
+                    bn_valid_nodes[n_idx] = bn_ancestors[n_idx]
+
+            #print segm_s,base_node,len(bn_ancestors),len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
+            #print base_node_str
+            #print sorted(bn_ancestors)
+            #print ec_lsc,itp_lsc
+            #print self.__nodes__[base_node]
+            #print bn_valid_nodes
+            
             while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best and still_more_nodes and segm_best<self.__max_backtrack_iters__: 
                 # dejamos al menos tantos nodos como segmentos quedan
                 segm_best+=1
-                (ec_lsc,itp_lsc,base_node),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
-                bn_ancestors,bn_siblings = self.__family__(base_node)
-                bn_valid_nodes = [n_idx for n_idx in bn_siblings if n_idx in valid_nodes]
+                (ec_lsc,itp_lsc,base_node,base_node_str),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
+                bn_ancestors = self.__ancestors__(base_node,base_node_str,segm_s)
+                bn_valid_nodes = {}
+                for n_idx in bn_ancestors:
+                    if n_idx in valid_nodes:
+                        bn_valid_nodes[n_idx] = bn_ancestors[n_idx]
+
                 #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
             #print segm_best,self.__max_backtrack_iters__
             if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) or not still_more_nodes or segm_best>=self.__max_backtrack_iters__: # backtracking
@@ -372,212 +444,36 @@ class Hypergraph:
                 segm_best = 1
 
             if segm_idx == len(segm_list):
-                #TODO: include consensus derivation in backtracking
-                common_derivation,consensus,ancestors_coverage = self.__consensusDerivation__(nodes_list)
-                if common_derivation:
+                #print "\nBN:",base_node,base_node_str
+                heads = [n_idx for n_idx in self.__nodes__ if len(self.__nodes__[n_idx].getParents())==0]
+                if base_node in heads:
                     self.__max_backtrack_iters__ = 2
                     timestamp = time.time()-init_time
-                    sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n")
-                    return nodes_list,consensus,ancestors_coverage
-                else:
-                    # backtracking because no common derivation
-                    try:
-                        segm_idx,valid_nodes,segm_best,first_segm=stack.pop()
-                        nodes_list.pop()
-                        segm_best+=1
-                    except IndexError:
-                        self.__max_backtrack_iters__ += 1
-                        first_segm = True
+                    sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n") 
+                    return ec_lsc," ".join(base_node_str).replace("|||","")
+                    
+                max_lsc = float("-inf")
+                max_string = None
+                for h_idx in heads:
+                    if h_idx in valid_nodes:
+                        #print "H:",h_idx, valid_nodes[h_idx]
+                        out_string,out_ec_lsc =valid_nodes[h_idx]
+                        if out_ec_lsc > max_lsc:
+                            max_lsc = out_ec_lsc
+                            max_string = out_string
+                #print max_lsc,max_string
+                #sys.exit()
+                self.__max_backtrack_iters__ = 2
+                timestamp = time.time()-init_time
+                sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n")        
+                return max_lsc," ".join(max_string).replace("|||","")
     #---------------------------------------------------
 
-    #---------------------------------------------------
-    # Return a derivation common to all nodes
-    def __consensusDerivation__(self, nodes):
-        heads = dict( [(n_idx,True) for n_idx in self.__nodes__] )
-        ancestors_cover = {}
-        base_leaves = []
-        #TODO: contar cover solo si suben por el mismo edge
-        for node_pos,node_tuple in enumerate(nodes):
-            _,base_node,_,_,ancestors=node_tuple
-            if base_node not in ancestors_cover:
-                base_leaves.append(base_node)
-                ancestors_cover[base_node] = []
-            ancestors_cover[base_node].append(node_pos)
-            n_heads = {}
-            for n_idx in ancestors:
-                if n_idx not in ancestors_cover:
-                    ancestors_cover[n_idx] = []
-                ancestors_cover[n_idx].append(node_pos)
-                if len(self.__nodes__[n_idx].getParents())==0:
-                    n_heads[n_idx]=True
-            heads = dict([(n_idx,True) for n_idx in n_heads if n_idx in heads])
-        try:
-            assert len(heads)>0
-        except AssertionError:
-            print nodes
-            print heads
-            #return False,[],ancestors_cover
-            sys.exit()
-
-        # eliminar invalid covers
-        #print len(ancestors_cover)
-        valid_covers = dict([(tuple(range(i,j)),True) for i in range(len(nodes)+1) for j in range(i+1,len(nodes)+1)]) # only ordered covers
-        ancestors_keys = ancestors_cover.keys()
-        for n_idx in ancestors_keys:
-            if tuple(ancestors_cover[n_idx]) not in valid_covers:
-                ancestors_cover.pop(n_idx)
-        #print len(ancestors_cover)
-        # print heads
-
-        raw_consensus = []
-        dead_ends = {}
-        node_dependency = {}
-        to_process = dict([ (n_idx,range(len(nodes))) for n_idx in heads ])
-        next_to_process = {}
-        while len(to_process)>0:
-            #print to_process
-            for n_idx,coverage in to_process.items():
-                #print n_idx,coverage
-                coverage.sort()
-                node_dependency[n_idx]=[]
-                valid_uphill_edge = False
-                for _,sons,_ in self.__nodes__[n_idx].getSons():
-                    n_cover = []
-                    for s_idx in sons:
-                        if s_idx in ancestors_cover:
-                            n_cover.append(ancestors_cover[s_idx])
-                        else:
-                            n_cover.append([])
-                    #print "->",sons,n_cover
-                    if sorted(sum(n_cover,[]))==coverage:
-                        valid_uphill_edge = True
-                        node_dependency[n_idx].append((sons,n_cover))
-                        #print n_idx,coverage,"->",sons,n_cover
-                        for s_pos in range(len(sons)):
-                            if n_cover[s_pos]!=[] and sons[s_pos]!=n_idx:
-                                if sons[s_pos] not in next_to_process and sons[s_pos] not in to_process and sons[s_pos] not in raw_consensus:
-                                    next_to_process[sons[s_pos]] = n_cover[s_pos]
-                if valid_uphill_edge:
-                    raw_consensus.append(n_idx)
-                else:
-                    dead_ends[n_idx]=True
-            to_process = next_to_process
-            next_to_process = {}        
-
-        seen = {}
-        for _,base_node,_,_,_ in nodes:
-            seen[base_node]=True
-        consensus = []
-        for n_idx in reversed(raw_consensus):
-            if n_idx not in seen:
-                consensus.append(n_idx)
-                seen[n_idx] = True
-        consensus.sort()
-
-        #flag detectando si al menos hay una derivacion comun
-        #print dead_ends
-        clean_consensus=[]
-        for n_idx in consensus:
-            dependencies = node_dependency[n_idx]
-            #print n_idx,dependencies
-            alive=False
-            for sons,n_cover in dependencies: 
-                # hijos con coverage no en dead_ends
-                edge_alive = True
-                being_inspected = [sons[s_pos] for s_pos in range(len(sons)) if n_cover[s_pos]!=[]]
-                for s_idx in being_inspected:
-                    if s_idx in dead_ends and s_idx not in base_leaves:
-                        edge_alive=False
-                        break
-                if edge_alive:
-                    alive = True
-                    break
-            #print alive
-            if alive:
-                clean_consensus.append(n_idx)
-            else:
-                dead_ends[n_idx]=True
-        #print len(consensus),len(clean_consensus)
-
-        # TODO: ademas derivacion para cada base_leave, no solo para una
-        #common_derivation = (len(clean_consensus)!=0)
-        common_derivation = False
-        for n_idx in heads:
-            common_derivation = common_derivation or (n_idx in clean_consensus)
-
-        return common_derivation,consensus,ancestors_cover
-    #---------------------------------------------------    
-
-
-    #---------------------------------------------------
-    # return translation resulting from uphill
-    # derivation between prev_idx and next
-    # prev_idx covers covered_string
-    def __uphill_derivation__(self,next_idx,mod_covered_strings):
-        max_edge = (None, None, float("-inf"))
-        max_step_lsc = float("-inf")
-        max_coverage = []
-        next = self.__nodes__[next_idx]
-        for son_tuple in next.getSons(): # search for best edge
-            _,sons,edge_lsc = son_tuple
-            for s_idx in sons:
-                if s_idx in mod_covered_strings:
-                    step_lsc = sum([self.__nodes__[s_idx].getInsideLogScore() for s_idx in sons])+edge_lsc
-                    step_cover = list(set( sum([mod_covered_strings[s_idx][1] for s_idx in sons if s_idx in mod_covered_strings],[])))
-                    if len(step_cover)>len(max_coverage):
-                        max_edge = son_tuple
-                        max_step_lsc = step_lsc
-                        max_coverage = step_cover
-                        #print "S1:",next_idx,sons,step_lsc,step_cover
-                    elif len(step_cover)==len(max_coverage) and step_lsc>max_step_lsc:
-                        max_edge = son_tuple
-                        max_step_lsc = step_lsc
-                        max_coverage = step_cover
-                        #print "S2:",next_idx,sons,step_lsc,step_cover
-                    break
-        rhs,sons,edge_lsc = max_edge
-        if not rhs: # some nodes in consensus are not valid
-            return None,None,None
-        next_covered_string = ""
-        pos = 0
-        for w in rhs:
-            if w==self.__no_terminal__:
-                if sons[pos] in mod_covered_strings:
-                    next_covered_string += mod_covered_strings[sons[pos]][0]+" "
-                else:
-                    next_covered_string += self.__nodes__[sons[pos]].getCoveredString()+" "
-                pos += 1
-            else:
-                next_covered_string += w+" "
-        return next_covered_string,max_step_lsc,max_coverage
-    #---------------------------------------------------            
 
     #---------------------------------------------------
     # return best translation that completes user isles        
     def getTranslation(self, isles_s):
-        # TODO: search for best nodes and obtain consensus derivation
-        nodes_list,consensus,ancestors_coverage = self.__searchBestNodesMatch__(isles_s)
-        #print nodes_list
-        #print consensus
-
-        mod_covered_strings = {}
-        for segm_pos,segm_tuple in enumerate(nodes_list):
-            segm_s,base_node,_,_,_ = segm_tuple
-            mod_covered_strings[base_node]=(" ".join(segm_s),[segm_pos])
-
-        #print mod_covered_strings
-        for next_idx in consensus:
-            next_covered_string,step_lsc,next_cover = self.__uphill_derivation__(next_idx,mod_covered_strings)
-            if next_covered_string and sorted(next_cover)==ancestors_coverage[next_idx]: # some nodes in consensus are not valid
-                mod_covered_strings[next_idx] =(next_covered_string,next_cover)
-            #     print "C:",next_idx,next_cover,next_covered_string
-            # else:
-            #     print "Cover:",next_idx,next_cover,"-",ancestors_coverage[next_idx]
-        assert len(next_cover)==len(nodes_list)
-        # try:
-        #     assert len(next_cover)==len(nodes_list)
-        # except AssertionError:
-        #     sys.stderr.write("WARNING: potentially incomplete coverage.\n")
+        step_lsc,next_covered_string = self.__searchBestEcTranslation__(isles_s)
         return step_lsc,step_lsc,next_covered_string
     #---------------------------------------------------
 
@@ -788,7 +684,7 @@ def user(tra_s, ref_s, mapi):
 ###############################################################
 ###############################################################
 if len(sys.argv)!=7:
-    sys.stderr.write("USAGE: "+sys.argv[0]+" <hipergraphFile> <source> <reference> <err_w> <err_p> <mouse-actions-per-iteration>\n")
+    sys.stderr.write("USAGE: "+sys.argv[0]+" <wordgraphFile> <source> <reference> <err_w> <err_p> <mouse-actions-per-iteration>\n")
     sys.exit()
 
 file_name_hypergraph = sys.argv[1]
@@ -853,7 +749,7 @@ for s_idx in range(len(sources)):
     sys.stderr.write("SRC "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("REF "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    if s_idx<0:
+    if s_idx<9:
         continue
 
     user_isles_s = []
@@ -875,6 +771,7 @@ for s_idx in range(len(sources)):
             aux_out[user_stroke_pos] = "["+aux_out[user_stroke_pos]+"]"
         sys.stderr.write("# ISLE: "+" ".join(aux_out)+"\n")
         
+        #sys.exit()
         #print "T:",tra_s
         #print "R:",ref_s
         #print " --> I:"," ".join(user_isles_s)
