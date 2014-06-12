@@ -291,7 +291,7 @@ class Hypergraph:
                     #print "P",covered_sent,d,err_lsc,itp_lsc,cur_lsc
                     #print "P",nbest_nodes
             else:
-                max_suffix_size = len(covered_sent_s)-covered_sent_s.index("|||")-1
+                max_suffix_size = len(covered_sent_s)-covered_sent_s.index("|||")
                 for suffix_size in range(1,max_suffix_size):
                     covered_sent = " ".join(covered_sent_s[-suffix_size:]).replace("|UNK|UNK|UNK","").replace("</s>","").strip()
                     d = Levenshtein.distance(segm,covered_sent)
@@ -749,7 +749,7 @@ for s_idx in range(len(sources)):
     sys.stderr.write("SRC "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("REF "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    if s_idx<9:
+    if s_idx<0:
         continue
 
     user_isles_s = []
