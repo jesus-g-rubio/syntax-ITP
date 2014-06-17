@@ -1,7 +1,7 @@
-#! /usr/bin/python
+#! /usr/bin/pypy
 
 import sys,time,re
-import Levenshtein
+#import Levenshtein
 from math import log10 as log
 from math import factorial as fact
 
@@ -12,7 +12,8 @@ from math import factorial as fact
 ###################################################################################
 class Node:
     #---------------------------------------------------
-    def __init__(self, idx, out, rhs, sons, edge_lsc, inside_lsc):
+    def __init__(self, idx, pos, out, rhs, sons, edge_lsc, inside_lsc):
+        self.__topologicPosition__ = pos
         self.__idx__ = idx
         self.__parents__ = []
         self.__sons__ = [(tuple(rhs),tuple(sons),edge_lsc)]
@@ -25,7 +26,7 @@ class Node:
     #---------------------------------------------------
     # converts node to string
     def __str__(self):
-        output = "H: "+str(self.__idx__)+" => \n"
+        output = "H: "+str(self.__idx__)+" ("+str(self.__topologicPosition__)+") => \n"
         indent = ' '*len(output)
         output += indent+"out    : \""+str(self.__out__)+"\"\n"
         output += indent+"inside : "+str(self.__inside_lsc__)+"\n"
@@ -79,7 +80,13 @@ class Node:
     # returns node idx
     def getIdx(self):
         return self.__idx__
-    #---------------------------------------------------    
+    #--------------------------------------------------- 
+
+    #---------------------------------------------------
+    # returns node topologic position
+    def getPos(self):
+        return self.__topologicPosition__
+    #--------------------------------------------------- 
 
     #---------------------------------------------------
     # return list of son tuples
@@ -125,7 +132,7 @@ class Node:
 class Hypergraph:
     #---------------------------------------------------
     def __init__(self):
-        self.__max_backtrack_iters__ = 2
+        self.__ec_cache__ = {}
 
         self.__nodes__ = {}
         self.__num_edges__ = 0
@@ -244,8 +251,9 @@ class Hypergraph:
                 self.__nodes__[self.__init_node__].setOutside(idx,edge_lsc+f_lsc)
 
         if rec == None:
+            position = len(self.__nodes__)
             covered_string = self.__stringFromRhs__(rhs,sons)
-            new_node = Node(idx, covered_string, rhs, sons, edge_lsc, inside_lsc)
+            new_node = Node(idx, position, covered_string, rhs, sons, edge_lsc, inside_lsc)
             new_node.setOutside(forward,f_lsc)
             self.__nodes__[idx] = new_node
             n_idx = idx
@@ -265,223 +273,162 @@ class Hypergraph:
     #---------------------------------------------------
 
     #---------------------------------------------------
-    # return the best matching node among valid nodes
-    def __searchNbestNodeMatchRestricted__(self, segm_s, segm_best, valid_nodes, first_isle):
-        segm = " ".join(segm_s).strip()
-        n = len(segm)
-        #print "SN:",segm_s, segm_best, len(valid_nodes), first_isle
+    # Returnt vector with hyp idx sorted topologically 
+    def __hypothesesByTopologicOrder__(self):
+        aux = sorted([(self.__nodes__[n_idx].getPos(),n_idx) for n_idx in self.__nodes__])
+        return [x[1] for x in aux]
+    #---------------------------------------------------
+
+    # #---------------------------------------------------
+    # # compute EC score
+    # def __ecLogScore__(self,s,r):
+    #     # if (s,r) in self.__ec_cache__:
+    #     #     return self.__ec_cache__[s,r]
+
+    #     n = len(r)
+    #     d = Levenshtein.distance(r,s)
+    #     d = min(d,n)
+    #     err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
+    #     #self.__ec_cache__[s,r] = err_lsc
+    #     return err_lsc
+    # #---------------------------------------------------
+
+    # #---------------------------------------------------
+    # # return ec log score and ec string
+    # def __bestEcLogScore__(self, isl, full_hyp):
+    #     full_hyp_s = full_hyp.strip().split()
+    #     best_match_lsc = float("-inf")
+    #     best_match = None
+    #     try:
+    #         min_match_pos = full_hyp_s.index("|||")+1
+    #         for ini_pos in range(min_match_pos,len(full_hyp_s)):
+    #             for end_pos in range(ini_pos+1,len(full_hyp_s)+1):
+    #                 candidate_match = " ".join(full_hyp_s[ini_pos:end_pos])
+    #                 #print ini_pos,end_pos,candidate_match
+    #                 ec_lsc = self.__ecLogScore__(isl,candidate_match)
+    #                 if ec_lsc>best_match_lsc:
+    #                     best_match_lsc = ec_lsc
+    #                     best_match = (ini_pos,end_pos)
+    #     except ValueError:
+    #         ini_pos = 0
+    #         for end_pos in range(ini_pos+1,len(full_hyp_s)+1):
+    #             candidate_match = " ".join(full_hyp_s[ini_pos:end_pos])
+    #             #print ini_pos,end_pos,candidate_match
+    #             ec_lsc = self.__ecLogScore__(isl,candidate_match)
+    #             if ec_lsc>best_match_lsc:
+    #                 best_match_lsc = ec_lsc
+    #                 best_match = (ini_pos,end_pos)
         
-        nbest_nodes = []
-        for n_idx in valid_nodes:
-            covered_sent_s,inside_lsc = valid_nodes[n_idx]
-            #print n_idx,covered_sent_s,inside_lsc
-            # all nodes represent prefixes
-            # "|||" symbol represents previous matching
-            # search for node whith best EC score on the unmatched suffix
-            if first_isle:
-                covered_sent = " ".join(covered_sent_s).replace("|UNK|UNK|UNK","").replace("</s>","").strip()
-                d = Levenshtein.distance(segm,covered_sent)
-                d = min(d,n)
-                err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
-                itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
-                cur_lsc = itp_lsc+self.err_w*err_lsc #inside x outside x err**err_w
-                if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[0][0]:
-                    nbest_nodes.append((cur_lsc,itp_lsc,n_idx,segm_s))
-                    nbest_nodes = sorted(nbest_nodes)[-segm_best:]
-                    #print "P",covered_sent,d,err_lsc,itp_lsc,cur_lsc
-                    #print "P",nbest_nodes
-            else:
-                max_suffix_size = len(covered_sent_s)-covered_sent_s.index("|||")
-                for suffix_size in range(1,max_suffix_size):
-                    covered_sent = " ".join(covered_sent_s[-suffix_size:]).replace("|UNK|UNK|UNK","").replace("</s>","").strip()
-                    d = Levenshtein.distance(segm,covered_sent)
-                    d = min(d,n)
-                    err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
-                    itp_lsc = self.__nodes__[n_idx].getInsideLogScore()+self.__nodes__[n_idx].getOutsideLogScore()
-                    cur_lsc = itp_lsc+self.err_w*err_lsc #inside x outside x err**err_w
-                    if len(nbest_nodes)<=segm_best or cur_lsc>nbest_nodes[0][0]:
-                        out_str = covered_sent_s[:-suffix_size]+tuple(segm_s)
-                        nbest_nodes.append((cur_lsc,itp_lsc,n_idx,out_str))
-                        nbest_nodes = sorted(nbest_nodes)[-segm_best:]
-                        #print "I",covered_sent,d,err_lsc,itp_lsc,cur_lsc
-                        #print "I", nbest_nodes
-        #print nbest_nodes
-        #return max_lsc,max_itp_lsc,max_node
-        #sys.exit()
-        still_more_options = True
-        if len(nbest_nodes)<segm_best:
-            still_more_options = False
-        return nbest_nodes[0],still_more_options
-    #---------------------------------------------------
+    #     if best_match:
+    #         ini,end=best_match
+    #         #print best_match
+    #         new_ec_string = full_hyp_s[:ini]+[isl+" |||"]+full_hyp_s[end:]
+    #         return best_match_lsc," ".join(new_ec_string)
+    # #---------------------------------------------------
 
 
     #---------------------------------------------------
-    # compute ancestors of a given node
-    def __ancestors__(self,n_idx,n_str,segm_s):
-        ancestors = {} # compute parents
-        to_process = dict([(p_tuple[0],True) for p_tuple in self.__nodes__[n_idx].getParents()])
-        while len(to_process)>0:
-            c_idx = min(to_process.keys())
-            for p_idx,_ in self.__nodes__[c_idx].getParents():
-                if p_idx not in to_process and p_idx not in ancestors:
-                    to_process[p_idx]=True
-            ancestors[c_idx]=True
-            del to_process[c_idx]
+    # Compute best ec match and score
+    # TODO: efficient segment match
+    def __ecMatch__(self, seq, ref):
+        oneago = None
+        thisrow = range(1, len(ref) + 1) + [0]
+        for x in xrange(len(seq)):
+            twoago, oneago, thisrow = oneago, thisrow, [0] * len(ref) + [x + 1]
+            for y in xrange(len(ref)):
+                delcost = oneago[y] + 1
+                addcost = thisrow[y - 1] + 1
+                subcost = oneago[y - 1] + (seq[x] != ref[y])
+                thisrow[y] = min(delcost, addcost, subcost)
+        #print seq
+        #print ref
+        #print thisrow
+        #return thisrow[len(ref) - 1],len(ref)
+        thisrow.pop() # eliminate last element
+        n = thisrow.index(min(thisrow))+1
+        d = thisrow[n-1]
+        d = min(d,n)
+        err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
+        return err_lsc,n
+    #---------------------------------------------------     
 
-        # compute best inside string
-        anc_info={}
-        anc_info[n_idx]=(tuple(list(n_str)+["|||"]),self.__nodes__[n_idx].getInsideLogScore())
-        ancestor_idxs=sorted(ancestors.keys())
-        #print n_idx,n_str,segm_s
-        #print self.__nodes__[n_idx]
-        #print len(ancestor_idxs)
-        #print ancestor_idxs
-        while len(ancestor_idxs)>0:
-            c_idx = ancestor_idxs.pop(0)
-            #print c_idx
-            max_lsc = float("-inf")
-            early_stop=False
-            for rhs,sons,edge_lsc in self.__nodes__[c_idx].getSons():
-                if len(sons)==1 and (sons[0] in ancestors or sons[0]==n_idx):
-                    #print rhs,sons,edge_lsc
+    #---------------------------------------------------
+    # return ec log score and ec string
+    def __bestEcLogScore__(self, isl, full_hyp):
+        full_hyp_s = full_hyp.strip().split()
+        isl_s = isl.strip().split()
+        try:
+            min_match_pos = full_hyp_s.index("|||")+1
+            candidate_match_s = full_hyp_s[min_match_pos:]
+            # reverse suffix matching
+            ec_lsc,ec_match_len = self.__ecMatch__(isl_s[::-1],candidate_match_s[::-1])
+            best_match = ((len(full_hyp_s)-ec_match_len),len(full_hyp_s))
+        except ValueError:
+            candidate_match_s = full_hyp_s
+            ec_lsc,ec_match_len = self.__ecMatch__(isl_s,candidate_match_s)
+            best_match = (0,ec_match_len)
+        
+        if best_match:
+            ini,end=best_match
+            #print isl_s
+            #print full_hyp_s
+            #print best_match
+            new_ec_string = full_hyp_s[:ini]+[isl+" |||"]+full_hyp_s[end:]
+            return ec_lsc," ".join(new_ec_string)
+    #---------------------------------------------------
+    
+    #---------------------------------------------------
+    # return best translation that completes user isles
+    # dynamic programming over nodes
+    def getEcTranslation(self, isles_s):
+        ordered_nodes = self.__hypothesesByTopologicOrder__()
+        #print isles_s
+        isles = [x.strip() for x in ("<s> "+" ".join(isles_s)).strip().split("<+>") if len(x.strip())>0]
+        #print isles
+        N = len(isles)
+        heads = dict([(h_idx,True) for h_idx in self.__nodes__ if len(self.__nodes__[h_idx].getParents())==0])
+
+        Q={}
+        # base case, only one node in WG
+        n_idx = 0
+        hyp = self.__nodes__[n_idx]
+        Q[n_idx,-1]=(hyp.getCoveredString(), hyp.getInsideLogScore(), hyp.getInsideLogScore()) # no cover
+        isl = isles[0]
+        err_lsc,new_ec_str = self.__bestEcLogScore__(isl,hyp.getCoveredString())
+        Q[n_idx,0]=(new_ec_str, hyp.getInsideLogScore()+err_lsc, hyp.getInsideLogScore()) # cover first isle
+
+        #print Q[n_idx,-1]
+        #print Q[n_idx,0]
+
+        # general recursion
+        assert ordered_nodes.pop(0)==0 # delete base case
+        for n_idx in ordered_nodes:
+            hyp = self.__nodes__[n_idx]
+            hyp_sons = hyp.getSons()
+            Q[n_idx,-1] = (hyp.getCoveredString(), hyp.getInsideLogScore(), hyp.getInsideLogScore()) # no cover
+            #print n_idx,-1,Q[n_idx,-1]
+            for num_isle in range(N):
+                for rhs,sons,edge_lsc in hyp_sons:
                     s_idx = sons[0]
-                    if s_idx in anc_info:
-                        s_str_s,s_inside_lsc = anc_info[s_idx]
-                    else:
-                        if c_idx not in ancestor_idxs:
-                            ancestor_idxs.append(c_idx)
-                        early_stop = True
-                        break
-                        
-                    new_lsc = s_inside_lsc + edge_lsc
-                    #print s_str_s,rhs
-                    if new_lsc>max_lsc:
-                        max_str_s = s_str_s + rhs[1:]
-                        max_lsc = new_lsc
-                        max_idx = s_idx
-            
-
-            if max_lsc>float("-inf"):
-                anc_info[c_idx] = (max_str_s,max_lsc)
-            elif not early_stop:
-                print self.__nodes__[c_idx]
-                sys.exit()
-           
-            #print c_idx,max_idx,anc_info[c_idx]
-            #print "-----------------------"
-
-        del anc_info[n_idx]
-        return anc_info
-    #---------------------------------------------------
-
-    #---------------------------------------------------
-    # return a list with the best matching nodes
-    def __searchBestEcTranslation__(self, isles_s):
-        sys.stderr.write("# Searching for best derivation ... ")
-        init_time = time.time()
-        if len(isles_s)==0:
-            isles_s = ['<s>']
-        
-        # backtracking to obtain best set of nodes
-        #print "------------"
-        #print "Isles:",isles_s
-        valid_nodes = {}
-        for n_idx in sorted(self.__nodes__):
-            valid_nodes[n_idx] = (tuple(self.__nodes__[n_idx].getCoveredString().strip().split()),self.__nodes__[n_idx].getInsideLogScore())
-            # if len(self.__nodes__[n_idx].getParents())>0:
-            #     valid_nodes[n_idx] = (tuple(self.__nodes__[n_idx].getCoveredString().strip().split()),self.__nodes__[n_idx].getInsideLogScore())
-
-        nodes_list = []
-        first_segm = True
-        segm_list = [ segm.strip().split() for segm in " ".join(isles_s).strip().split("<+>") if len(segm.strip())>0 ]
-        stack=[]
-        segm_idx = 0
-        segm_best = 1
-        while segm_idx < len(segm_list):
-            segm_s = segm_list[segm_idx]
-            (ec_lsc,itp_lsc,base_node,base_node_str),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
-            bn_ancestors = self.__ancestors__(base_node,base_node_str,segm_s)
-            bn_valid_nodes = {}
-            for n_idx in bn_ancestors:
-                if n_idx in valid_nodes:
-                    bn_valid_nodes[n_idx] = bn_ancestors[n_idx]
-
-            #print segm_s,base_node,len(bn_ancestors),len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
-            #print base_node_str
-            #print sorted(bn_ancestors)
-            #print sorted(bn_valid_nodes.keys())
-            #print ec_lsc,itp_lsc
-            #print self.__nodes__[base_node]
-            #print bn_valid_nodes
-            
-            while len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) and len(valid_nodes)>segm_best and still_more_nodes and segm_best<self.__max_backtrack_iters__: 
-                # dejamos al menos tantos nodos como segmentos quedan
-                segm_best+=1
-                (ec_lsc,itp_lsc,base_node,base_node_str),still_more_nodes = self.__searchNbestNodeMatchRestricted__(segm_s, segm_best, valid_nodes, first_segm)
-                bn_ancestors = self.__ancestors__(base_node,base_node_str,segm_s)
-                bn_valid_nodes = {}
-                for n_idx in bn_ancestors:
-                    if n_idx in valid_nodes:
-                        bn_valid_nodes[n_idx] = bn_ancestors[n_idx]
-
-                #print "->",segm_best,base_node,len(bn_valid_nodes),(len(segm_list)-segm_idx-1),still_more_nodes
-            #print segm_best,self.__max_backtrack_iters__
-            if len(bn_valid_nodes) < (len(segm_list)-segm_idx-1) or not still_more_nodes or segm_best>=self.__max_backtrack_iters__: # backtracking
-                try:
-                    segm_idx,valid_nodes,segm_best,first_segm=stack.pop()
-                    nodes_list.pop()
-                    segm_best+=1
-                except IndexError:
-                    self.__max_backtrack_iters__ += 1
-                    first_segm = True
-                    sys.stderr.write("#")
-                sys.stderr.write(str(segm_idx))
-                #print "bt:",segm_idx,segm_list[segm_idx],segm_best,len(valid_nodes)
-                #print nodes_list
-            else:
-                stack.append((segm_idx,valid_nodes,segm_best,first_segm))
-                nodes_list.append((segm_s,base_node,ec_lsc,itp_lsc,bn_ancestors))
-                valid_nodes = bn_valid_nodes
-                #print len(valid_nodes),base_node,segm_best,segm_s
-                first_segm = False
-                segm_idx += 1
-                segm_best = 1
-
-            if segm_idx == len(segm_list):
-                #print "\nBN:",base_node,base_node_str
-                heads = [n_idx for n_idx in self.__nodes__ if len(self.__nodes__[n_idx].getParents())==0]
-                #print heads
-                if base_node in heads:
-                    self.__max_backtrack_iters__ = 2
-                    timestamp = time.time()-init_time
-                    sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n") 
-                    return ec_lsc," ".join(base_node_str).replace("|||","")
-                    
-                max_lsc = float("-inf")
-                max_string = None
-                for h_idx in heads:
-                    if h_idx in valid_nodes:
-                        #print "H:",h_idx, valid_nodes[h_idx]
-                        out_string,out_ec_lsc =valid_nodes[h_idx]
-                        if out_ec_lsc > max_lsc:
-                            max_lsc = out_ec_lsc
-                            max_string = out_string
-                #print max_lsc,max_string
-                #sys.exit()
-                self.__max_backtrack_iters__ = 2
-                timestamp = time.time()-init_time
-                sys.stderr.write(" Done ( "+str(timestamp)+" s.)\n")        
-                #print max_lsc,max_string
-                #print ec_lsc,base_node_str
-                return max_lsc," ".join(max_string).replace("|||","")
-    #---------------------------------------------------
-
-
-    #---------------------------------------------------
-    # return best translation that completes user isles        
-    def getTranslation(self, isles_s):
-        step_lsc,next_covered_string = self.__searchBestEcTranslation__(isles_s)
-        return step_lsc,step_lsc,next_covered_string
+                    if (s_idx,num_isle-1) in Q:
+                        s_str,s_lsc,_ = Q[s_idx,num_isle-1]
+                        new_str = s_str+" "+" ".join(rhs[1:])
+                        #print new_str
+                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[num_isle],new_str)
+                        cur_lsc = hyp.getInsideLogScore()+err_lsc
+                        if (n_idx,num_isle) not in Q or Q[n_idx,num_isle][1]<cur_lsc:
+                            Q[n_idx,num_isle] = (new_ec_str, cur_lsc, hyp.getInsideLogScore())
+                            #print "F ->",s_idx,num_isle-1,Q[s_idx,num_isle-1]
+                            #print "T ->",n_idx,num_isle,Q[n_idx,num_isle]
+                                
+        best_ec_lsc = float("-inf")
+        best_ec_str = None
+        for h_idx in heads:
+            if (h_idx,N-1) in Q and Q[h_idx,N-1][1]>best_ec_lsc:
+                best_ec_str,best_ec_lsc,best_itp_lsc = Q[h_idx,N-1]
+                #print "Head:",h_idx,N-1,Q[h_idx,N-1]
+        #sys.exit()
+        return best_ec_lsc,best_itp_lsc,best_ec_str.replace("|||","")
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -758,13 +705,16 @@ for s_idx in range(len(sources)):
 
     if s_idx<0:
         continue
+    # if s_idx>1:
+    #     sys.exit()
 
     user_isles_s = []
     strokes = 0
     while True:
-        ec_lsc,itp_lsc,out = hg.getTranslation(user_isles_s)
+        ec_lsc,itp_lsc,out = hg.getEcTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
+        #print tra_s
         user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s, mapi)
         strokes += ws
 
