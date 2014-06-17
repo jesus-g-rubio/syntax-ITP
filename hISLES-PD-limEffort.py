@@ -255,11 +255,17 @@ class Hypergraph:
         self.__outside__()
     #---------------------------------------------------
 
-    
+    #---------------------------------------------------
+    # Returnt vector with hyp idx sorted topologically 
+    def __hypothesesByTopologicOrder__(self):
+        aux = sorted([(self.__nodes__[n_idx].getPos(),n_idx) for n_idx in self.__nodes__])
+        return [x[1] for x in aux]
+    #---------------------------------------------------
+
     #---------------------------------------------------
     # Compute best ec match and score
     # TODO: efficient segment match
-    def __ecMatch__(self, seq, ref):
+    def __ecMatch__(self, ref, seq):
         oneago = None
         thisrow = range(1, len(ref) + 1) + [0]
         for x in xrange(len(seq)):
@@ -269,32 +275,45 @@ class Hypergraph:
                 addcost = thisrow[y - 1] + 1
                 subcost = oneago[y - 1] + (seq[x] != ref[y])
                 thisrow[y] = min(delcost, addcost, subcost)
-        #print seq
-        #print ref
-        #print thisrow
-        #return thisrow[len(ref) - 1],len(ref)
+        # return thisrow[len(ref) - 1],len(ref)
         thisrow.pop() # eliminate last element
-        n = thisrow.index(min(thisrow))+1
+        #n = thisrow.index(min(thisrow))+1
+        n = len(thisrow)-thisrow[-1::-1].index(min(thisrow)) 
         d = thisrow[n-1]
-        d = min(d,n)
+        # print seq
+        # print ref
+        # print thisrow
+        # print d,n
+        #d = min(d,n)
+        n=max(d,len(seq))
+        #print d,n
         err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
         return err_lsc,n
     #---------------------------------------------------     
 
     #---------------------------------------------------
     # return ec log score and ec string
-    def __bestEcLogScore__(self, isl, full_hyp):
+    def __bestEcLogScore__(self, isl, full_hyp, prepend=False):
         full_hyp_s = full_hyp.strip().split()
         isl_s = isl.strip().split()
         try:
-            min_match_pos = full_hyp_s.index("|||")+1
-            candidate_match_s = full_hyp_s[min_match_pos:]
-            # reverse suffix matching
-            ec_lsc,ec_match_len = self.__ecMatch__(isl_s[::-1],candidate_match_s[::-1])
-            best_match = ((len(full_hyp_s)-ec_match_len),len(full_hyp_s))
+            if prepend: # prefix matching
+                min_match_pos = full_hyp_s.index("|||")
+                candidate_match_s = full_hyp_s[:min_match_pos]
+                ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s,isl_s)
+                best_match = (0,ec_match_len)
+            else:
+                # rindex implementation, las index of "|||"
+                # len(a) - a[-1::-1].index("hello") - 1
+                max_match_pos = len(full_hyp_s)-full_hyp_s[-1::-1].index("|||") - 1
+                candidate_match_s = full_hyp_s[max_match_pos:]
+                # reverse suffix matching
+                ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s[::-1],isl_s[::-1])
+                best_match = ((len(full_hyp_s)-ec_match_len),len(full_hyp_s))
         except ValueError:
+            # prefix matching
             candidate_match_s = full_hyp_s
-            ec_lsc,ec_match_len = self.__ecMatch__(isl_s,candidate_match_s)
+            ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s,isl_s)
             best_match = (0,ec_match_len)
         
         if best_match:
@@ -302,63 +321,147 @@ class Hypergraph:
             #print isl_s
             #print full_hyp_s
             #print best_match
-            new_ec_string = full_hyp_s[:ini]+[isl+" |||"]+full_hyp_s[end:]
+            new_ec_string = full_hyp_s[:ini]+["||| "+isl+" |||"]+full_hyp_s[end:]
             return ec_lsc," ".join(new_ec_string)
     #---------------------------------------------------
     
     #---------------------------------------------------
+    # returns the string corresponding to a given rhs
+    def __ecStringFromRhs__(self, rhs, sons_str):
+        covered_string = ""
+        s_pos = 0
+        for w in rhs:
+            if w != self.__no_terminal__:
+                covered_string += w+" "
+            else:
+                covered_string += sons_str[s_pos] +" "
+                s_pos += 1
+        return covered_string
+    #---------------------------------------------------
+
+    #---------------------------------------------------
+    # compute valid sons combinations
+    def __combinationsOfSonsCoverages(self, sons, Q):
+        if len(sons)==0:
+            return {}
+        else:
+            s1_idx = sons[0]
+            combinations = {}
+            for cov in Q[s1_idx]:
+                s_ec_str,s_ec_lsc,_ = Q[s1_idx][cov]
+                combinations[cov] = (s_ec_lsc,[s_ec_str])
+            if len(sons)==1:
+                return dict([(cov,combinations[cov]) for cov in combinations if cov != None])
+            elif len(sons)==2:
+                new_combinations = {}
+                s2_idx = sons[1] 
+                #print combinations
+                #print Q[s2_idx].keys()
+                for s2_cov in Q[s2_idx]:
+                    for s1_cov in combinations:
+                        comb_cov = None
+                        if s1_cov==None:
+                            comb_cov = s2_cov
+                        elif s2_cov==None:
+                            comb_cov = s1_cov
+                        elif s1_cov[1]==s2_cov[0]:
+                            comb_cov = (s1_cov[0],s2_cov[1])
+                        #print s1_cov, s2_cov,"->",comb_cov
+                        s1_ec_str,s1_ec_lsc,_ = Q[s1_idx][s1_cov]
+                        s2_ec_str,s2_ec_lsc,_ = Q[s2_idx][s2_cov]
+                        comb_lsc = s1_ec_lsc+s2_ec_lsc
+                        if comb_cov != None and (comb_cov not in new_combinations or comb_lsc > new_combinations[comb_cov][0]):
+                            new_combinations[comb_cov] = (comb_lsc,[s1_ec_str,s2_ec_str])
+                #print new_combinations
+                #sys.exit()
+                return new_combinations
+            else:
+                sys.stderr.write("ERROR: more than two sons.\n")
+                sys.stderr.write(str(sons)+"\n")
+                sys.exit()
+    #---------------------------------------------------
+
+    #---------------------------------------------------
     # return best translation that completes user isles
     # dynamic programming over nodes
-    # TODO: adapt to hypergraphs
     def getEcTranslation(self, isles_s):
         ordered_nodes = self.__hypothesesByTopologicOrder__()
         #print isles_s
         isles = [x.strip() for x in ("<s> "+" ".join(isles_s)).strip().split("<+>") if len(x.strip())>0]
         #print isles
         N = len(isles)
+        # -> (0,1) represents isles[0:1], end do not included in segment
+        
         heads = dict([(h_idx,True) for h_idx in self.__nodes__ if len(self.__nodes__[h_idx].getParents())==0])
 
         Q={}
-        # base case, 
-        # TODO: repeat for all leaves
-        n_idx = 0
-        hyp = self.__nodes__[n_idx]
-        Q[n_idx,-1]=(hyp.getCoveredString(), hyp.getInsideLogScore(), hyp.getInsideLogScore()) # no cover
-        isl = isles[0]
-        err_lsc,new_ec_str = self.__bestEcLogScore__(isl,hyp.getCoveredString())
-        Q[n_idx,0]=(new_ec_str, hyp.getInsideLogScore()+err_lsc, hyp.getInsideLogScore()) # cover first isle
-
-        #print Q[n_idx,-1]
-        #print Q[n_idx,0]
-
-        # general recursion
-        # TODO: edge recursion for all possible subsegments of islands
-        assert ordered_nodes.pop(0)==0 # delete base case
         for n_idx in ordered_nodes:
             hyp = self.__nodes__[n_idx]
             hyp_sons = hyp.getSons()
-            Q[n_idx,-1] = (hyp.getCoveredString(), hyp.getInsideLogScore(), hyp.getInsideLogScore()) # no cover
-            #print n_idx,-1,Q[n_idx,-1]
-            for num_isle in range(N):
-                for rhs,sons,edge_lsc in hyp_sons:
-                    s_idx = sons[0]
-                    if (s_idx,num_isle-1) in Q:
-                        s_str,s_lsc,_ = Q[s_idx,num_isle-1]
-                        new_str = s_str+" "+" ".join(rhs[1:])
-                        #print new_str
-                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[num_isle],new_str)
-                        cur_lsc = hyp.getInsideLogScore()+err_lsc
-                        if (n_idx,num_isle) not in Q or Q[n_idx,num_isle][1]<cur_lsc:
-                            Q[n_idx,num_isle] = (new_ec_str, cur_lsc, hyp.getInsideLogScore())
-                            #print "F ->",s_idx,num_isle-1,Q[s_idx,num_isle-1]
-                            #print "T ->",n_idx,num_isle,Q[n_idx,num_isle]
-                                
+            hyp_str = hyp.getCoveredString()
+            itp_lsc = ec_lsc = hyp.getInsideLogScore()
+            Q[n_idx] = {}
+            Q[n_idx][None] = (hyp_str, ec_lsc, itp_lsc) # no cover
+            if hyp_str[:3]=="<s>":
+                err_lsc,new_ec_str = self.__bestEcLogScore__(isles[0],hyp_str, prepend=True)
+                ec_cov = (0,1)
+                ec_lsc = itp_lsc+err_lsc
+                if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
+                    Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)    
+            
+            best_ec_lsc = float("-inf")
+            for rhs,sons,edge_lsc in hyp_sons:
+                # compute combinations of sons coverages, only valid sequential coverages
+                #  coverage->sons_lsc,(s1_str,...)
+                if len(sons)==0:
+                    for num_isle in range(N):
+                        if (num_isle==0 and rhs[0]!="<s>") or (num_isle!=0 and rhs[0]=="<s>"):
+                            continue
+                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[num_isle]," ".join(rhs), prepend=True)
+                        ec_cov = (num_isle,num_isle+1)
+                        ec_lsc = itp_lsc+err_lsc
+                        if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
+                            Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
+                # print "N:",n_idx,"a"
+                # for cov in Q[n_idx]:
+                #     print " -",cov,"->",Q[n_idx][cov]
+
+                # compute combinations of sons coverages, only valid sequential coverages
+                #  coverage->sons_lsc,(s1_str,...)
+                sons_coverages = self.__combinationsOfSonsCoverages(sons,Q)
+                for s_cov in sons_coverages:
+                    sons_ec_lsc,sons_ec_str = sons_coverages[s_cov]
+                    new_str = self.__ecStringFromRhs__(rhs, sons_ec_str)
+                    ec_cov = s_cov
+                    ec_lsc = sons_ec_lsc+edge_lsc
+                    if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
+                        Q[n_idx][ec_cov] = (new_str, ec_lsc, itp_lsc)
+
+                    m_cov,M_cov = s_cov
+                    if m_cov>0:
+                        if not (m_cov-1 == 0 and new_str[:3]!="<s>") or (m_cov-1!=0 and new_str[:3]=="<s>"):
+                            err_lsc,new_ec_str = self.__bestEcLogScore__(isles[m_cov-1],new_str,prepend=True)
+                            ec_cov = (m_cov-1,M_cov)
+                            ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
+                            if new_ec_str and (ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]):
+                                Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
+                    if M_cov<N:
+                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[M_cov],new_str)
+                        ec_cov = (m_cov,M_cov+1)
+                        ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
+                        if new_ec_str and (ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]):
+                            Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
+            # print "N:",n_idx,"a"
+            # for cov in Q[n_idx]:
+            #     print " -",cov,"->",Q[n_idx][cov]
+
         best_ec_lsc = float("-inf")
         best_ec_str = None
+        full_cov = (0,N)
         for h_idx in heads:
-            if (h_idx,N-1) in Q and Q[h_idx,N-1][1]>best_ec_lsc:
-                best_ec_str,best_ec_lsc,best_itp_lsc = Q[h_idx,N-1]
-                #print "Head:",h_idx,N-1,Q[h_idx,N-1]
+            if full_cov in Q[h_idx] and Q[h_idx][full_cov][1]>best_ec_lsc:
+                best_ec_str,best_ec_lsc,best_itp_lsc = Q[h_idx][full_cov]
+                #print "Head:",h_idx,full_cov,Q[h_idx][full_cov]
         #sys.exit()
         return best_ec_lsc,best_itp_lsc,best_ec_str.replace("|||","")
     #---------------------------------------------------
@@ -636,8 +739,10 @@ for s_idx in range(len(sources)):
     sys.stderr.write("SRC "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("REF "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    if s_idx<0:
-        continue
+    # if s_idx<2:
+    #     continue
+    # if s_idx>2:
+    #     sys.exit()
 
     user_isles_s = []
     strokes = 0
@@ -645,6 +750,8 @@ for s_idx in range(len(sources)):
         ec_lsc,itp_lsc,out = hg.getEcTranslation(user_isles_s)
         tra_s = out.replace("|UNK|UNK|UNK","").replace("<s>","").replace("</s>","").strip().split()
 
+        #print tra_s
+        #sys.exit()
         user_isles_s,user_feedback,end_interaction,ma,ws,user_stroke_pos = user(tra_s, ref_s, mapi)
         strokes += ws
 
