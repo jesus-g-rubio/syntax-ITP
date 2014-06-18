@@ -229,30 +229,10 @@ class Hypergraph:
     #---------------------------------------------------    
 
     #---------------------------------------------------
-    # Outside: update outside_lsc and outside parent 
-    def __outside__(self):  
-        ordered_keys = sorted(self.__nodes__, reverse=True)
-        for n_idx in ordered_keys:
-            node=self.__nodes__[n_idx]
-            max_outside_lsc = float("-inf")
-            max_outside_parent = None
-            if node.isHead():
-                node.setOutside(None,0.0)
-            else:
-                for p_idx,p_edge_lsc in node.getParents():
-                    outside_lsc = self.__nodes__[p_idx].getOutsideLogScore()+p_edge_lsc
-                    if outside_lsc>max_outside_lsc:
-                        max_outside_lsc = outside_lsc
-                        max_outside_parent = p_idx
-                node.setOutside(max_outside_parent,max_outside_lsc)
-    #---------------------------------------------------
-
-    #---------------------------------------------------
     # configure hypergraph for future ITP requests
     def configure(self, err_w, err_p):
         self.err_w = err_w
         self.err_p = err_p
-        self.__outside__()
     #---------------------------------------------------
 
     #---------------------------------------------------
@@ -265,7 +245,7 @@ class Hypergraph:
     #---------------------------------------------------
     # Compute best ec match and score
     # TODO: efficient segment match
-    def __ecMatch__(self, ref, seq):
+    def __ecMatch__(self, seq, ref):
         oneago = None
         thisrow = range(1, len(ref) + 1) + [0]
         for x in xrange(len(seq)):
@@ -277,15 +257,15 @@ class Hypergraph:
                 thisrow[y] = min(delcost, addcost, subcost)
         # return thisrow[len(ref) - 1],len(ref)
         thisrow.pop() # eliminate last element
-        #n = thisrow.index(min(thisrow))+1
-        n = len(thisrow)-thisrow[-1::-1].index(min(thisrow)) 
+        n = thisrow.index(min(thisrow))+1
+        #n = len(thisrow)-thisrow[-1::-1].index(min(thisrow)) 
         d = thisrow[n-1]
         # print seq
         # print ref
         # print thisrow
         # print d,n
-        #d = min(d,n)
-        n=max(d,len(seq))
+        d = min(d,n)
+        #n=max(d,len(seq))
         #print d,n
         err_lsc = d*log(self.err_p) + (n-d)*log(1.0-self.err_p) + log(fact(n))-(log(fact(d))+log(fact(n-d)))
         return err_lsc,n
@@ -300,7 +280,7 @@ class Hypergraph:
             if prepend: # prefix matching
                 min_match_pos = full_hyp_s.index("|||")
                 candidate_match_s = full_hyp_s[:min_match_pos]
-                ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s,isl_s)
+                ec_lsc,ec_match_len = self.__ecMatch__(isl_s,candidate_match_s)
                 best_match = (0,ec_match_len)
             else:
                 # rindex implementation, las index of "|||"
@@ -308,20 +288,21 @@ class Hypergraph:
                 max_match_pos = len(full_hyp_s)-full_hyp_s[-1::-1].index("|||") - 1
                 candidate_match_s = full_hyp_s[max_match_pos:]
                 # reverse suffix matching
-                ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s[::-1],isl_s[::-1])
+                ec_lsc,ec_match_len = self.__ecMatch__(isl_s[::-1],candidate_match_s[::-1])
                 best_match = ((len(full_hyp_s)-ec_match_len),len(full_hyp_s))
         except ValueError:
             # prefix matching
             candidate_match_s = full_hyp_s
-            ec_lsc,ec_match_len = self.__ecMatch__(candidate_match_s,isl_s)
+            ec_lsc,ec_match_len = self.__ecMatch__(isl_s,candidate_match_s)
             best_match = (0,ec_match_len)
         
         if best_match:
             ini,end=best_match
-            #print isl_s
-            #print full_hyp_s
-            #print best_match
+            # print isl_s
+            # print full_hyp_s
+            # print best_match
             new_ec_string = full_hyp_s[:ini]+["||| "+isl+" |||"]+full_hyp_s[end:]
+            #print new_ec_string
             return ec_lsc," ".join(new_ec_string)
     #---------------------------------------------------
     
@@ -346,35 +327,30 @@ class Hypergraph:
             return {}
         else:
             s1_idx = sons[0]
-            combinations = {}
+            s1_covs = {}
             for cov in Q[s1_idx]:
                 s_ec_str,s_ec_lsc,_ = Q[s1_idx][cov]
-                combinations[cov] = (s_ec_lsc,[s_ec_str])
+                s1_covs[cov] = (s_ec_lsc,[s_ec_str])
             if len(sons)==1:
-                return dict([(cov,combinations[cov]) for cov in combinations if cov != None])
+                return s1_covs
             elif len(sons)==2:
-                new_combinations = {}
+                combinations = {}
                 s2_idx = sons[1] 
-                #print combinations
-                #print Q[s2_idx].keys()
                 for s2_cov in Q[s2_idx]:
-                    for s1_cov in combinations:
+                    for s1_cov in s1_covs:
                         comb_cov = None
                         if s1_cov==None:
                             comb_cov = s2_cov
-                        elif s2_cov==None:
+                        elif s2_cov == None:
                             comb_cov = s1_cov
                         elif s1_cov[1]==s2_cov[0]:
                             comb_cov = (s1_cov[0],s2_cov[1])
-                        #print s1_cov, s2_cov,"->",comb_cov
                         s1_ec_str,s1_ec_lsc,_ = Q[s1_idx][s1_cov]
                         s2_ec_str,s2_ec_lsc,_ = Q[s2_idx][s2_cov]
                         comb_lsc = s1_ec_lsc+s2_ec_lsc
-                        if comb_cov != None and (comb_cov not in new_combinations or comb_lsc > new_combinations[comb_cov][0]):
-                            new_combinations[comb_cov] = (comb_lsc,[s1_ec_str,s2_ec_str])
-                #print new_combinations
-                #sys.exit()
-                return new_combinations
+                        if comb_cov not in combinations or comb_lsc > combinations[comb_cov][0]:
+                            combinations[comb_cov] = (comb_lsc,[s1_ec_str,s2_ec_str])
+                return combinations
             else:
                 sys.stderr.write("ERROR: more than two sons.\n")
                 sys.stderr.write(str(sons)+"\n")
@@ -402,56 +378,42 @@ class Hypergraph:
             itp_lsc = ec_lsc = hyp.getInsideLogScore()
             Q[n_idx] = {}
             Q[n_idx][None] = (hyp_str, ec_lsc, itp_lsc) # no cover
-            if hyp_str[:3]=="<s>":
-                err_lsc,new_ec_str = self.__bestEcLogScore__(isles[0],hyp_str, prepend=True)
-                ec_cov = (0,1)
+
+            for num_isle in range(N): # single island cover over covered translation, equivalent to leaves
+                if (num_isle==0 and hyp_str[:3]!="<s>") or (num_isle!=0 and hyp_str[:3]=="<s>"):
+                    continue
+                err_lsc,new_ec_str = self.__bestEcLogScore__(isles[num_isle],hyp_str, prepend=True)
+                ec_cov = (num_isle,num_isle+1)
                 ec_lsc = itp_lsc+err_lsc
                 if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
-                    Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)    
-            
-            best_ec_lsc = float("-inf")
-            for rhs,sons,edge_lsc in hyp_sons:
-                # compute combinations of sons coverages, only valid sequential coverages
-                #  coverage->sons_lsc,(s1_str,...)
-                if len(sons)==0:
-                    for num_isle in range(N):
-                        if (num_isle==0 and rhs[0]!="<s>") or (num_isle!=0 and rhs[0]=="<s>"):
-                            continue
-                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[num_isle]," ".join(rhs), prepend=True)
-                        ec_cov = (num_isle,num_isle+1)
-                        ec_lsc = itp_lsc+err_lsc
-                        if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
-                            Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
-                # print "N:",n_idx,"a"
-                # for cov in Q[n_idx]:
-                #     print " -",cov,"->",Q[n_idx][cov]
+                    Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
 
-                # compute combinations of sons coverages, only valid sequential coverages
-                #  coverage->sons_lsc,(s1_str,...)
-                sons_coverages = self.__combinationsOfSonsCoverages(sons,Q)
-                for s_cov in sons_coverages:
-                    sons_ec_lsc,sons_ec_str = sons_coverages[s_cov]
-                    new_str = self.__ecStringFromRhs__(rhs, sons_ec_str)
-                    ec_cov = s_cov
-                    ec_lsc = sons_ec_lsc+edge_lsc
-                    if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
-                        Q[n_idx][ec_cov] = (new_str, ec_lsc, itp_lsc)
+            for rhs,sons,edge_lsc in hyp_sons: # general cover from sons
+                if len(rhs)>0: # condition to avoid shitty sentences
+                    # no leaves because are included in previous loop
+                    if len(sons)>0:
+                        sons_coverages = self.__combinationsOfSonsCoverages(sons,Q)
+                        for s_cov in sons_coverages:
+                            sons_ec_lsc,sons_ec_str = sons_coverages[s_cov]
+                            new_str = self.__ecStringFromRhs__(rhs, sons_ec_str)
 
-                    m_cov,M_cov = s_cov
-                    if m_cov>0:
-                        if not (m_cov-1 == 0 and new_str[:3]!="<s>") or (m_cov-1!=0 and new_str[:3]=="<s>"):
-                            err_lsc,new_ec_str = self.__bestEcLogScore__(isles[m_cov-1],new_str,prepend=True)
-                            ec_cov = (m_cov-1,M_cov)
-                            ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
-                            if new_ec_str and (ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]):
-                                Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
-                    if M_cov<N:
-                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[M_cov],new_str)
-                        ec_cov = (m_cov,M_cov+1)
-                        ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
-                        if new_ec_str and (ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]):
-                            Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
-            # print "N:",n_idx,"a"
+                            # further matchings left or right
+                            if s_cov != None:
+                                m_cov,M_cov = s_cov
+                                if m_cov>0:
+                                    ec_cov = (m_cov-1,M_cov)
+                                    if not (ec_cov[0] == 0 and new_str[:3]!="<s>") or (ec_cov[0]!=0 and new_str[:3]=="<s>"):
+                                        err_lsc,new_ec_str = self.__bestEcLogScore__(isles[ec_cov[0]],new_str,prepend=True)
+                                        ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
+                                        if ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]:
+                                            Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
+                                if M_cov<N:
+                                    err_lsc,new_ec_str = self.__bestEcLogScore__(isles[M_cov],new_str)
+                                    ec_cov = (m_cov,M_cov+1)
+                                    ec_lsc = sons_ec_lsc+edge_lsc+err_lsc
+                                    if new_ec_str and (ec_cov not in Q[n_idx] or ec_lsc > Q[n_idx][ec_cov][1]):
+                                        Q[n_idx][ec_cov] = (new_ec_str, ec_lsc, itp_lsc)
+            # print "N:",n_idx
             # for cov in Q[n_idx]:
             #     print " -",cov,"->",Q[n_idx][cov]
 
@@ -739,9 +701,9 @@ for s_idx in range(len(sources)):
     sys.stderr.write("SRC "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(src_s)+"\n")
     sys.stderr.write("REF "+str(s_idx)+" ( "+str(timestamp)+" ): "+" ".join(ref_s)+"\n")
 
-    # if s_idx<2:
-    #     continue
-    # if s_idx>2:
+    if s_idx<0:
+        continue
+    # if s_idx>3:
     #     sys.exit()
 
     user_isles_s = []
