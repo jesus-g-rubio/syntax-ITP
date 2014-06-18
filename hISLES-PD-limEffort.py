@@ -246,6 +246,9 @@ class Hypergraph:
     # Compute best ec match and score
     # TODO: efficient segment match
     def __ecMatch__(self, seq, ref):
+        if len(ref)==0: # shitty lines
+            return -100,0
+            
         oneago = None
         thisrow = range(1, len(ref) + 1) + [0]
         for x in xrange(len(seq)):
